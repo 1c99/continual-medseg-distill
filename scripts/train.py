@@ -1,38 +1,47 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import argparse
-from pathlib import Path
 import torch
+
 from src.utils.config import load_yaml, merge_dicts
-from src.data.registry import build_dataloader
+from src.utils.logging import setup_logger
+from src.data.registry import create_loaders
 from src.models.factory import build_model
+from src.methods import create_method
+from src.engine.trainer import train
+from src.engine.evaluator import evaluate
+
 
 def main():
-    ap=argparse.ArgumentParser()
-    ap.add_argument('--config', required=True)
-    ap.add_argument('--method-config', default=None)
-    ap.add_argument('--task-config', default=None)
-    ap.add_argument('--dataset-config', default=None)
-    ap.add_argument('--dry-run', action='store_true')
-    args=ap.parse_args()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--config", required=True)
+    ap.add_argument("--method-config", default=None)
+    ap.add_argument("--task-config", default=None)
+    ap.add_argument("--dataset-config", default=None)
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
 
-    cfg=load_yaml(args.config)
-    for p in [args.method_config,args.task_config,args.dataset_config]:
-        if p: cfg=merge_dicts(cfg, load_yaml(p))
+    cfg = load_yaml(args.config)
+    for p in [args.method_config, args.task_config, args.dataset_config]:
+        if p:
+            cfg = merge_dicts(cfg, load_yaml(p))
 
-    device='cuda' if torch.cuda.is_available() else 'cpu'
-    model=build_model(cfg).to(device)
-    train_loader=build_dataloader(cfg, split='train')
+    cfg.setdefault("runtime", {})
+    cfg["runtime"]["device"] = "cuda" if torch.cuda.is_available() else "cpu"
 
-    print(f"[train] device={device} batches={len(train_loader)}")
-    if args.dry_run:
-        x,y=next(iter(train_loader))
-        with torch.no_grad():
-            out=model(x.to(device))
-        print('[dry-run] x',tuple(x.shape),'y',tuple(y.shape),'out',tuple(out.shape))
-        return
+    logger = setup_logger("train")
+    train_loader, val_loader = create_loaders(cfg)
+    model = build_model(cfg)
+    method = create_method(cfg)
 
-    # TODO: full training loop w/ methods (finetune/replay/distill/ewc)
-    print('TODO: implement full training loop')
+    logger.info(f"method={cfg.get('method', {}).get('name', 'finetune')}")
+    logger.info(f"device={cfg['runtime']['device']} train_batches={len(train_loader)}")
 
-if __name__=='__main__':
+    model = train(model, method, train_loader, cfg, logger, dry_run=args.dry_run)
+    metrics = evaluate(model, val_loader, cfg, logger)
+    logger.info(f"eval={metrics}")
+
+
+if __name__ == "__main__":
     main()

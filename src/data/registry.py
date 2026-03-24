@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Tuple
+from typing import Dict, Tuple
 from torch.utils.data import DataLoader
 
 from .synthetic import Synthetic3DSpec, SyntheticSeg3DDataset
 
 
-def create_loaders(cfg: Dict[str, Any]) -> Tuple[DataLoader, DataLoader]:
+def create_loaders(cfg: Dict) -> Tuple[DataLoader, DataLoader]:
     data_cfg = cfg.get("data", {})
     train_bs = data_cfg.get("batch_size", 2)
     val_bs = data_cfg.get("val_batch_size", train_bs)
@@ -40,3 +40,9 @@ def create_loaders(cfg: Dict[str, Any]) -> Tuple[DataLoader, DataLoader]:
     train_loader = DataLoader(train_ds, batch_size=train_bs, shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=val_bs, shuffle=False)
     return train_loader, val_loader
+
+
+def build_dataloader(cfg: Dict, split: str = "train") -> DataLoader:
+    """Compatibility helper used by scripts."""
+    train_loader, val_loader = create_loaders(cfg)
+    return train_loader if split == "train" else val_loader
