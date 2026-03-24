@@ -1,0 +1,13 @@
+task_sequence:
+  name: ct_mri_sequence_example
+  tasks:
+    - id: task1_ct_abdomen
+      modality: CT
+      classes: [liver, spleen, kidney]
+    - id: task2_mri_abdomen
+      modality: MRI
+      classes: [liver, spleen, kidney]
+
+continual:
+  setting: class_incremental
+  # TODO: define formal protocol variants (task-incremental / domain-incremental)

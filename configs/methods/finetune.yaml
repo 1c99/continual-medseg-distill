@@ -1,0 +1,4 @@
+method:
+  name: finetune
+  params:
+    note: "Sequential fine-tune baseline"

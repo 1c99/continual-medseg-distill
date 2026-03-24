@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "continual-medseg-distill"
+version = "0.1.0"
+description = "Scaffold for continual learning + distillation in 3D medical segmentation"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "torch>=2.2",
+  "monai>=1.3",
+  "nibabel>=5.2",
+  "pyyaml>=6.0",
+  "tqdm>=4.66",
+  "numpy>=1.26",
+  "pandas>=2.2",
+  "scipy>=1.12"
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+exclude = ["tests*"]

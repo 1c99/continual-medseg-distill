@@ -1,0 +1,31 @@
+datasets:
+  registry:
+    synthetic:
+      type: synthetic
+      description: Tiny generated 3D volumes for smoke tests.
+
+    btcv:
+      type: medical_decathlon_style
+      modality: CT
+      root: /path/to/BTCV
+      split_file: /path/to/splits/btcv_train_val.json
+      notes: "Requires manual download/registration. See docs/dataset_notes.md"
+
+    kits:
+      type: kits23_style
+      modality: CT
+      root: /path/to/KiTS
+      split_file: /path/to/splits/kits_train_val.json
+      notes: "Registration and terms may apply."
+
+    msd:
+      type: medical_decathlon_style
+      modality: CT_MRI_mixed
+      root: /path/to/MSD
+      split_file: /path/to/splits/msd_train_val.json
+      notes: "Use task-specific preprocessing."
+
+active_dataset: synthetic
+
+data:
+  source: synthetic
