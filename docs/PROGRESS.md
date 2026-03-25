@@ -32,6 +32,12 @@ Set up an initial research scaffold for continual distillation in 3D CT/MRI segm
 
 ## Current Technical Status
 
+### New in latest coding pass
+- Implemented **logit KD baseline** in `src/methods/distill.py`.
+- Implemented combined scaffold in `src/methods/distill_replay_ewc.py`:
+  - replay + KD + EWC-style regularization placeholder.
+- Added clear note that Fisher-based EWC is still pending for publication-grade rigor.
+
 ### Working now
 - Config loading and method dispatch are wired.
 - Model/data factory compatibility fixes are in place.

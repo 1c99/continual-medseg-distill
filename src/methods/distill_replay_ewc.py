@@ -1,15 +1,65 @@
 from __future__ import annotations
 
-from .base import ContinualMethod
+import copy
+from typing import Dict
+import torch
+import torch.nn.functional as F
+
+from .replay import ReplayMethod
 
 
-class DistillReplayEWCMethod(ContinualMethod):
-    """Combined method skeleton: distillation + replay + EWC.
+class DistillReplayEWCMethod(ReplayMethod):
+    """Combined scaffold: distillation + replay + EWC-style regularization.
 
-    TODO:
-    - implement replay buffer strategy
-    - implement teacher-based distillation objective
-    - estimate Fisher information and apply EWC penalty
+    NOTE: EWC term here is a lightweight placeholder (L2-to-prev-params weighted by lambda).
+    Replace with Fisher-based EWC for publication-grade experiments.
     """
 
-    pass
+    def __init__(self, cfg: Dict):
+        super().__init__(cfg)
+        mcfg = cfg.get("method", {})
+        kd_cfg = mcfg.get("kd", {})
+        ewc_cfg = mcfg.get("ewc", {})
+
+        self.kd_weight = float(kd_cfg.get("weight", 1.0))
+        self.temperature = float(kd_cfg.get("temperature", 2.0))
+        self.ewc_weight = float(ewc_cfg.get("weight", 0.1))
+
+        self.teacher_model: torch.nn.Module | None = None
+        self.prev_params: Dict[str, torch.Tensor] = {}
+
+    def _ewc_penalty(self, model: torch.nn.Module, device: str) -> torch.Tensor:
+        if not self.prev_params:
+            return torch.tensor(0.0, device=device)
+        penalty = torch.tensor(0.0, device=device)
+        for n, p in model.named_parameters():
+            if n in self.prev_params:
+                penalty = penalty + (p - self.prev_params[n].to(device)).pow(2).mean()
+        return penalty
+
+    def training_loss(self, model: torch.nn.Module, batch: Dict, device: str) -> torch.Tensor:
+        # base CE + replay from ReplayMethod
+        base_loss = super().training_loss(model, batch, device)
+
+        x = batch["image"].to(device)
+        student_logits = model(x)
+
+        kd = torch.tensor(0.0, device=device)
+        if self.teacher_model is not None:
+            with torch.no_grad():
+                teacher_logits = self.teacher_model(x)
+            T = self.temperature
+            kd = F.kl_div(
+                F.log_softmax(student_logits / T, dim=1),
+                F.softmax(teacher_logits / T, dim=1),
+                reduction="batchmean",
+            ) * (T * T)
+
+        ewc = self._ewc_penalty(model, device)
+        return base_loss + self.kd_weight * kd + self.ewc_weight * ewc
+
+    def post_task_update(self, model: torch.nn.Module) -> None:
+        self.teacher_model = copy.deepcopy(model).eval()
+        for p in self.teacher_model.parameters():
+            p.requires_grad = False
+        self.prev_params = {n: p.detach().cpu().clone() for n, p in model.named_parameters()}
