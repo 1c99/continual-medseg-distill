@@ -6,6 +6,10 @@ data:
     root: /media/user/data2/data2/data/Totalsegmentator_dataset
     organ: liver
     shape: [128, 128, 128]
-    # Replace with your validated split manifest
-    train_ids: [s0001, s0002, s0003]
-    val_ids: [s0004, s0005]
+
+    # Preferred: load IDs from a persisted JSON/YAML split manifest.
+    split_manifest: data/splits/example_totalseg_split.json
+
+    # Fallback (optional): explicit IDs in config.
+    # train_ids: [s0001, s0002, s0003]
+    # val_ids: [s0004, s0005]

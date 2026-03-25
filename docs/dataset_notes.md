@@ -40,6 +40,21 @@ This project supports **config-driven dataset registration**. Actual loaders are
 - Use official dataset portals and comply with license/DUA requirements.
 - Store local paths in config files only (e.g., `configs/datasets/open_source_examples.yaml`).
 
+## TotalSegmentator scaffold split manifests
+
+The TotalSegmentator scaffold loader supports split manifests for subject IDs:
+
+- Config key: `data.totalseg.split_manifest`
+- Manifest file types: `.json`, `.yaml`, `.yml`
+- Split keys: `train`/`val` (preferred), `train_ids`/`val_ids` (compatibility)
+
+A minimal example is included at:
+- `data/splits/example_totalseg_split.json`
+
+If `split_manifest` is not provided, the loader still supports explicit config lists:
+- `data.totalseg.train_ids`
+- `data.totalseg.val_ids`
+
 ## TODO
 
 - [ ] Add dataset-specific parsing adapters in `src/data/registry.py`

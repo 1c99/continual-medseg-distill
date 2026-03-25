@@ -1,10 +1,79 @@
 from __future__ import annotations
 
-from typing import Dict, Tuple
+import json
+from pathlib import Path
+from typing import Dict, Iterable, Tuple
+
+import yaml
 from torch.utils.data import DataLoader
 
 from .synthetic import Synthetic3DSpec, SyntheticSeg3DDataset
 from .totalseg import TotalSegmentatorDataset
+
+
+def _coerce_id_list(values: Iterable) -> list[str]:
+    """Normalize split entries to a list of subject IDs.
+
+    Supports either:
+    - ["s0001", "s0002", ...]
+    - [{"id": "s0001"}, {"subject_id": "s0002"}, ...]
+    """
+    ids: list[str] = []
+    for item in values:
+        if isinstance(item, str):
+            ids.append(item)
+        elif isinstance(item, dict):
+            subject_id = item.get("id") or item.get("subject_id")
+            if subject_id:
+                ids.append(str(subject_id))
+            else:
+                raise ValueError(
+                    "Split manifest entries as objects must include 'id' or 'subject_id' fields."
+                )
+        else:
+            raise ValueError(f"Unsupported split entry type: {type(item)!r}")
+    return ids
+
+
+def _load_ids_from_split_manifest(split_manifest: str | Path) -> tuple[list[str], list[str]]:
+    path = Path(split_manifest)
+    if not path.exists():
+        raise FileNotFoundError(f"Split manifest not found: {path}")
+
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    elif suffix in {".yaml", ".yml"}:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    else:
+        raise ValueError(
+            f"Unsupported split manifest extension '{path.suffix}'. Use .json, .yaml, or .yml."
+        )
+
+    if not isinstance(payload, dict):
+        raise ValueError("Split manifest root must be a mapping/object.")
+
+    train_values = payload.get("train")
+    val_values = payload.get("val")
+
+    # Compatibility with existing key style
+    if train_values is None:
+        train_values = payload.get("train_ids")
+    if val_values is None:
+        val_values = payload.get("val_ids")
+
+    if train_values is None or val_values is None:
+        raise ValueError(
+            "Split manifest must include both train/val (or train_ids/val_ids) entries."
+        )
+
+    train_ids = _coerce_id_list(train_values)
+    val_ids = _coerce_id_list(val_values)
+
+    if not train_ids or not val_ids:
+        raise ValueError("Split manifest train/val lists must both be non-empty.")
+
+    return train_ids, val_ids
 
 
 def create_loaders(cfg: Dict) -> Tuple[DataLoader, DataLoader]:
@@ -37,11 +106,17 @@ def create_loaders(cfg: Dict) -> Tuple[DataLoader, DataLoader]:
         if not root:
             raise ValueError("data.totalseg.root is required for source=totalseg")
 
-        # TODO: replace with persisted split manifests
-        train_ids = tcfg.get("train_ids", [])
-        val_ids = tcfg.get("val_ids", [])
+        split_manifest = tcfg.get("split_manifest")
+        if split_manifest:
+            train_ids, val_ids = _load_ids_from_split_manifest(split_manifest)
+        else:
+            train_ids = tcfg.get("train_ids", [])
+            val_ids = tcfg.get("val_ids", [])
+
         if not train_ids or not val_ids:
-            raise ValueError("Provide data.totalseg.train_ids and val_ids in config")
+            raise ValueError(
+                "Provide either data.totalseg.split_manifest or data.totalseg.train_ids and val_ids in config"
+            )
 
         organ = tcfg.get("organ", "liver")
         shape = tuple(tcfg.get("shape", [128, 128, 128]))

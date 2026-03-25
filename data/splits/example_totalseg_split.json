@@ -1,0 +1,6 @@
+{
+  "dataset": "totalsegmentator",
+  "note": "Example scaffold split manifest with subject IDs.",
+  "train": ["s0001", "s0002", "s0003"],
+  "val": ["s0004", "s0005"]
+}

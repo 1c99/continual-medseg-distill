@@ -61,6 +61,12 @@ python scripts/train.py --config configs/base.yaml --dry-run
 python scripts/eval.py --config configs/base.yaml
 ```
 
+Training writes outputs to `output.dir` (default: `outputs/continual_medseg_scaffold`):
+
+- `metrics.csv` — epoch-wise `train_loss` and validation metrics
+- `checkpoints/last.pt` — latest epoch checkpoint
+- `checkpoints/best.pt` — best checkpoint by `output.best_metric` (default `voxel_acc`)
+
 Print resolved config:
 
 ```bash
