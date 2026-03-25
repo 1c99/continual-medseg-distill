@@ -43,7 +43,16 @@ def main():
     logger.info(f"method={cfg.get('method', {}).get('name', 'finetune')}")
     logger.info(f"device={cfg['runtime']['device']} train_batches={len(train_loader)}")
 
-    model = train(model, method, train_loader, cfg, logger, dry_run=args.dry_run)
+    model = train(
+        model,
+        method,
+        train_loader,
+        cfg,
+        logger,
+        dry_run=args.dry_run,
+        val_loader=val_loader,
+        evaluate_fn=evaluate,
+    )
     metrics = evaluate(model, val_loader, cfg, logger)
     logger.info(f"eval={metrics}")
 
