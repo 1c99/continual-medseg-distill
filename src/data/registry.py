@@ -7,6 +7,8 @@ from typing import Dict, Iterable, Tuple
 import yaml
 from torch.utils.data import DataLoader
 
+from .acdc import ACDCDataset
+from .brats21 import Brats21Dataset
 from .synthetic import Synthetic3DSpec, SyntheticSeg3DDataset
 from .totalseg import TotalSegmentatorDataset
 
@@ -123,11 +125,66 @@ def create_loaders(cfg: Dict) -> Tuple[DataLoader, DataLoader]:
 
         train_ds = TotalSegmentatorDataset(root=root, split_ids=train_ids, organ=organ, target_shape=shape)
         val_ds = TotalSegmentatorDataset(root=root, split_ids=val_ids, organ=organ, target_shape=shape)
+    elif source == "brats21":
+        bcfg = data_cfg.get("brats21", {})
+        root = bcfg.get("root")
+        if not root:
+            raise ValueError("data.brats21.root is required for source=brats21")
+
+        split_manifest = bcfg.get("split_manifest")
+        if split_manifest:
+            train_ids, val_ids = _load_ids_from_split_manifest(split_manifest)
+        else:
+            train_ids = bcfg.get("train_ids", [])
+            val_ids = bcfg.get("val_ids", [])
+
+        if not train_ids or not val_ids:
+            raise ValueError(
+                "Provide either data.brats21.split_manifest or data.brats21.train_ids and val_ids in config"
+            )
+
+        shape = tuple(bcfg.get("shape", [128, 128, 128]))
+        normalize_per_channel = bool(bcfg.get("normalize_per_channel", True))
+
+        train_ds = Brats21Dataset(
+            root=root,
+            split_ids=train_ids,
+            target_shape=shape,
+            normalize_per_channel=normalize_per_channel,
+        )
+        val_ds = Brats21Dataset(
+            root=root,
+            split_ids=val_ids,
+            target_shape=shape,
+            normalize_per_channel=normalize_per_channel,
+        )
+    elif source == "acdc":
+        acfg = data_cfg.get("acdc", {})
+        root = acfg.get("root")
+        if not root:
+            raise ValueError("data.acdc.root is required for source=acdc")
+
+        split_manifest = acfg.get("split_manifest")
+        if split_manifest:
+            train_ids, val_ids = _load_ids_from_split_manifest(split_manifest)
+        else:
+            train_ids = acfg.get("train_ids", [])
+            val_ids = acfg.get("val_ids", [])
+
+        if not train_ids or not val_ids:
+            raise ValueError(
+                "Provide either data.acdc.split_manifest or data.acdc.train_ids and val_ids in config"
+            )
+
+        shape = tuple(acfg.get("shape", [16, 160, 160]))
+        normalize = bool(acfg.get("normalize", True))
+
+        train_ds = ACDCDataset(root=root, split_ids=train_ids, target_shape=shape, normalize=normalize)
+        val_ds = ACDCDataset(root=root, split_ids=val_ids, target_shape=shape, normalize=normalize)
     else:
-        # TODO: implement additional dataset adapters (MSD/BTCV/KiTS/AMOS/CHAOS/BraTS)
         raise NotImplementedError(
             f"Dataset source '{source}' is not implemented yet. "
-            "Use data.source=synthetic or totalseg for now."
+            "Use data.source=synthetic, totalseg, brats21, or acdc."
         )
 
     train_loader = DataLoader(train_ds, batch_size=train_bs, shuffle=True)

@@ -1,0 +1,17 @@
+data:
+  source: brats21
+  batch_size: 1
+  val_batch_size: 1
+  brats21:
+    # Local extracted BraTS21 root only (no auto-download):
+    #   <root>/<case_id>/<case_id>_{t1,t1ce,t2,flair,seg}.nii.gz
+    root: /path/to/local/BraTS2021
+    shape: [128, 128, 128]
+    normalize_per_channel: true
+
+    # Preferred: JSON/YAML split manifest with train/val (or train_ids/val_ids)
+    split_manifest: data/splits/example_brats21_split.json
+
+    # Fallback:
+    # train_ids: [BraTS2021_00000, BraTS2021_00001]
+    # val_ids: [BraTS2021_00002]

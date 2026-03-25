@@ -1,0 +1,18 @@
+data:
+  source: acdc
+  batch_size: 1
+  val_batch_size: 1
+  acdc:
+    # Local extracted ACDC root only (no auto-download):
+    #   <root>/patientXXX/frameYY.nii.gz
+    #   <root>/patientXXX/frameYY_gt.nii.gz
+    root: /path/to/local/ACDC
+    shape: [16, 160, 160]
+    normalize: true
+
+    # Preferred: JSON/YAML split manifest with train/val (or train_ids/val_ids)
+    split_manifest: data/splits/example_acdc_split.json
+
+    # Fallback sample IDs are "patientXXX_frameYY", e.g.:
+    # train_ids: [patient001_frame01, patient001_frame12]
+    # val_ids: [patient002_frame01]

@@ -40,6 +40,47 @@ This project supports **config-driven dataset registration**. Actual loaders are
 - Use official dataset portals and comply with license/DUA requirements.
 - Store local paths in config files only (e.g., `configs/datasets/open_source_examples.yaml`).
 
+## BraTS21 scaffold adapter
+
+- Source key: `data.source=brats21`
+- Required field: `data.brats21.root` (local extracted path)
+- Split input: either
+  - `data.brats21.split_manifest` (JSON/YAML with `train`/`val` or `train_ids`/`val_ids`), or
+  - inline `data.brats21.train_ids` and `data.brats21.val_ids`
+- Expected case structure:
+  - `<root>/<case_id>/<case_id>_t1.nii.gz`
+  - `<root>/<case_id>/<case_id>_t1ce.nii.gz`
+  - `<root>/<case_id>/<case_id>_t2.nii.gz`
+  - `<root>/<case_id>/<case_id>_flair.nii.gz`
+  - `<root>/<case_id>/<case_id>_seg.nii.gz`
+- Behavior:
+  - Uses four MRI modalities as channels.
+  - Center crop/pad to `data.brats21.shape`.
+  - Per-channel z-score normalization (toggle `normalize_per_channel`).
+  - Label remap `4 -> 3` so class IDs are contiguous.
+
+Example config:
+- `configs/datasets/brats21_example.yaml`
+
+## ACDC scaffold adapter
+
+- Source key: `data.source=acdc`
+- Required field: `data.acdc.root` (local extracted path)
+- Split input: either
+  - `data.acdc.split_manifest` (JSON/YAML with `train`/`val` or `train_ids`/`val_ids`), or
+  - inline `data.acdc.train_ids` and `data.acdc.val_ids`
+- Expected sample structure:
+  - `<root>/patientXXX/frameYY.nii.gz`
+  - `<root>/patientXXX/frameYY_gt.nii.gz`
+- Split IDs should be `patientXXX_frameYY` (example: `patient001_frame01`).
+- Behavior:
+  - Single-channel MRI input.
+  - Center crop/pad to `data.acdc.shape`.
+  - Z-score normalization (toggle `normalize`).
+
+Example config:
+- `configs/datasets/acdc_example.yaml`
+
 ## TotalSegmentator scaffold split manifests
 
 The TotalSegmentator scaffold loader supports split manifests for subject IDs:

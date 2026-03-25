@@ -88,6 +88,30 @@ or use one of:
 - `configs/methods/distill.yaml`
 - `configs/methods/distill_replay_ewc.yaml`
 
+## Dataset adapter examples (local-path only)
+
+BraTS21 example:
+
+```bash
+python scripts/train.py \
+  --config configs/base.yaml \
+  --dataset-config configs/datasets/brats21_example.yaml \
+  --dry-run
+```
+
+ACDC example:
+
+```bash
+python scripts/train.py \
+  --config configs/base.yaml \
+  --dataset-config configs/datasets/acdc_example.yaml \
+  --dry-run
+```
+
+Notes:
+- Update `root` and split IDs/manifest paths to your local extracted datasets.
+- No dataset download logic is included in this repo.
+
 ## Data preparation
 
 `prepare_data.py` does **not** download restricted datasets. It only creates a placeholder metadata JSON from a local dataset path:
