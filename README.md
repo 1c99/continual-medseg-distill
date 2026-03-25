@@ -26,6 +26,8 @@ continual-medseg-distill/
     train.py
     eval.py
     prepare_data.py
+    run_ablations.py
+    package_results.py
   src/
     data/
     models/
@@ -143,6 +145,34 @@ Entry template fields:
 - `scope`
 - `impact`
 - `next`
+
+## Packaging ablation results (paper-friendly bundle)
+
+After running `scripts/run_ablations.py`, package one run directory into a compact bundle:
+
+```bash
+python scripts/package_results.py \
+  outputs/ablations/ablation_run_YYYYMMDD_HHMMSS
+```
+
+Optional custom output path:
+
+```bash
+python scripts/package_results.py \
+  outputs/ablations/ablation_run_YYYYMMDD_HHMMSS \
+  --output-dir outputs/ablations/ablation_run_YYYYMMDD_HHMMSS/paper_bundle
+```
+
+Bundle outputs include:
+- `summary.md` — human-readable ranking table
+- `method_summary.csv` — merged metrics + ranking fields
+- `checkpoint_refs.csv` + `checkpoint_refs/*.txt` — references to key checkpoints (`best.pt`, `last.pt`)
+- `aggregate_metrics.csv` copy (when present)
+
+Ranking logic:
+- Methods are ranked by `dice_mean` (or nearest dice-like field found)
+- Forgetting ranking is included when a forgetting-like metric exists
+- Missing fields are explicitly called out in `summary.md`
 
 ## Next implementation targets
 

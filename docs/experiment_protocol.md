@@ -33,48 +33,36 @@ Use `scripts/run_ablations.py` to run multiple method configs in one shot and pr
 ### What it does
 
 - Iterates methods: `finetune`, `replay`, `distill`, `distill_replay_ewc`
-- Creates isolated run folders under one timestamped parent
+- Creates isolated run folders under one deterministic fingerprinted parent
+- Writes `run_manifest.json` with base/dataset/method/config hashes
 - Writes per-method resolved config snapshot (`resolved_config.yaml`)
 - Captures stdout/stderr logs (`train.log`, `train.stderr.log`)
 - Collects each run's final row from `metrics.csv`
 - Exports merged `aggregate_metrics.csv` (+ `summary.json`)
 
-### Default full method sweep
-
-```bash
-python scripts/run_ablations.py \
-  --base-config configs/base.yaml
-```
-
-### Fast smoke test (dry-run + synthetic)
+### Canonical command: synthetic baseline sweep
 
 ```bash
 python scripts/run_ablations.py \
   --base-config configs/base.yaml \
-  --dry-run \
   --synthetic
 ```
 
-### Run a subset of methods
+### Canonical command: real-data split-manifest mode
 
 ```bash
 python scripts/run_ablations.py \
   --base-config configs/base.yaml \
-  --methods finetune replay
+  --dataset-config configs/datasets/totalseg_example.yaml
 ```
 
-### Reuse existing finished runs
-
-```bash
-python scripts/run_ablations.py \
-  --base-config configs/base.yaml \
-  --skip-existing
-```
+> `--dataset-config` should point to a dataset YAML that sets `data.source` and `<source>.split_manifest` (for example `totalseg`, `brats21`, or `acdc`).
 
 ### Output layout
 
 ```text
-outputs/ablations/ablation_run_YYYYMMDD_HHMMSS/
+outputs/ablations/ablation_<fingerprint>/
+  run_manifest.json
   aggregate_metrics.csv
   summary.json
   finetune/
@@ -87,6 +75,24 @@ outputs/ablations/ablation_run_YYYYMMDD_HHMMSS/
   distill/
   distill_replay_ewc/
 ```
+
+## Packaging one run for reporting
+
+Once an ablation run is complete, build a paper-friendly bundle:
+
+```bash
+python scripts/package_results.py \
+  outputs/ablations/ablation_run_YYYYMMDD_HHMMSS
+```
+
+This creates `<run_dir>/result_bundle/` with:
+- `summary.md` (ranking by dice + forgetting when available)
+- `method_summary.csv` (all final-row metrics with rank columns)
+- `checkpoint_refs.csv` and per-checkpoint reference text files
+
+Notes:
+- Dice/forgetting columns are auto-detected from available metric keys.
+- If forgetting (or dice) is missing, the bundle includes caveats rather than failing.
 
 ## TODOs
 
