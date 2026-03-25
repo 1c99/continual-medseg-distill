@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import yaml
 import torch
 
 from src.utils.config import load_yaml, merge_dicts
@@ -20,12 +21,16 @@ def main():
     ap.add_argument("--task-config", default=None)
     ap.add_argument("--dataset-config", default=None)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--print-config", action="store_true")
     args = ap.parse_args()
 
     cfg = load_yaml(args.config)
     for p in [args.method_config, args.task_config, args.dataset_config]:
         if p:
             cfg = merge_dicts(cfg, load_yaml(p))
+
+    if args.print_config:
+        print(yaml.safe_dump(cfg, sort_keys=False))
 
     cfg.setdefault("runtime", {})
     cfg["runtime"]["device"] = "cuda" if torch.cuda.is_available() else "cpu"

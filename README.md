@@ -58,7 +58,7 @@ Run train + eval using synthetic 3D data (no dataset download required):
 
 ```bash
 python scripts/train.py --config configs/base.yaml --dry-run
-python scripts/eval.py --config configs/base.yaml --synthetic
+python scripts/eval.py --config configs/base.yaml
 ```
 
 Print resolved config:

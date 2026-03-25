@@ -1,0 +1,11 @@
+data:
+  source: totalseg
+  batch_size: 1
+  val_batch_size: 1
+  totalseg:
+    root: /media/user/data2/data2/data/Totalsegmentator_dataset
+    organ: liver
+    shape: [128, 128, 128]
+    # Replace with your validated split manifest
+    train_ids: [s0001, s0002, s0003]
+    val_ids: [s0004, s0005]

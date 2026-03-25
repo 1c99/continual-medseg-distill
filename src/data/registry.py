@@ -4,6 +4,7 @@ from typing import Dict, Tuple
 from torch.utils.data import DataLoader
 
 from .synthetic import Synthetic3DSpec, SyntheticSeg3DDataset
+from .totalseg import TotalSegmentatorDataset
 
 
 def create_loaders(cfg: Dict) -> Tuple[DataLoader, DataLoader]:
@@ -30,11 +31,28 @@ def create_loaders(cfg: Dict) -> Tuple[DataLoader, DataLoader]:
                 shape=tuple(synth_cfg.get("shape", [32, 32, 32])),
             )
         )
+    elif source == "totalseg":
+        tcfg = data_cfg.get("totalseg", {})
+        root = tcfg.get("root")
+        if not root:
+            raise ValueError("data.totalseg.root is required for source=totalseg")
+
+        # TODO: replace with persisted split manifests
+        train_ids = tcfg.get("train_ids", [])
+        val_ids = tcfg.get("val_ids", [])
+        if not train_ids or not val_ids:
+            raise ValueError("Provide data.totalseg.train_ids and val_ids in config")
+
+        organ = tcfg.get("organ", "liver")
+        shape = tuple(tcfg.get("shape", [128, 128, 128]))
+
+        train_ds = TotalSegmentatorDataset(root=root, split_ids=train_ids, organ=organ, target_shape=shape)
+        val_ds = TotalSegmentatorDataset(root=root, split_ids=val_ids, organ=organ, target_shape=shape)
     else:
-        # TODO: implement real dataset registry adapters (MSD/BTCV/KiTS/AMOS/CHAOS/BraTS)
+        # TODO: implement additional dataset adapters (MSD/BTCV/KiTS/AMOS/CHAOS/BraTS)
         raise NotImplementedError(
             f"Dataset source '{source}' is not implemented yet. "
-            "Use data.source=synthetic for now."
+            "Use data.source=synthetic or totalseg for now."
         )
 
     train_loader = DataLoader(train_ds, batch_size=train_bs, shuffle=True)
