@@ -83,7 +83,11 @@ def train(
         if evaluate_fn is not None and val_loader is not None:
             eval_metrics = evaluate_fn(model, val_loader, cfg, logger)
             for k, v in eval_metrics.items():
-                row[f"val_{k}"] = v
+                if isinstance(v, dict):
+                    for sub_k, sub_v in v.items():
+                        row[f"val_{k}_{sub_k}"] = sub_v
+                else:
+                    row[f"val_{k}"] = v
 
         metrics_logger.log(row)
 

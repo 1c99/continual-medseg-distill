@@ -63,7 +63,7 @@ python scripts/eval.py --config configs/base.yaml
 
 Training writes outputs to `output.dir` (default: `outputs/continual_medseg_scaffold`):
 
-- `metrics.csv` — epoch-wise `train_loss` and validation metrics
+- `metrics.csv` — epoch-wise `train_loss` and validation metrics (includes `dice_mean`, per-class Dice, and HD95 when available)
 - `checkpoints/last.pt` — latest epoch checkpoint
 - `checkpoints/best.pt` — best checkpoint by `output.best_metric` (default `voxel_acc`)
 
@@ -106,4 +106,4 @@ python scripts/prepare_data.py \
 2. Replay buffer strategy and sampler in `src/methods/replay.py`
 3. Teacher snapshot + KD losses in `src/methods/distill.py`
 4. Fisher estimation + EWC penalty in `src/methods/distill_replay_ewc.py`
-5. Proper segmentation metrics (Dice/HD95) + checkpointing
+5. Metric/reporting polish (confidence intervals, cohort-level summaries) + checkpointing strategy tuning
