@@ -124,6 +124,26 @@ python scripts/prepare_data.py \
   --dry-run
 ```
 
+## Progress logging automation
+
+Use the helper script to append standardized checkpoint entries to `docs/PROGRESS.md`.
+
+Example:
+
+```bash
+python scripts/update_progress.py \
+  --scope "Added KD loss weighting config and trainer wiring" \
+  --impact "Makes distillation experiments reproducible across runs" \
+  --next "Run ablation for alpha in {0.5, 1.0, 2.0}"
+```
+
+Entry template fields:
+- `date` (defaults to today)
+- `commit` (defaults to current git short SHA)
+- `scope`
+- `impact`
+- `next`
+
 ## Next implementation targets
 
 1. Real dataset adapters + MONAI transforms in `src/data/registry.py`
