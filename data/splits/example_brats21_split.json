@@ -1,0 +1,7 @@
+{
+  "split_version": "v1",
+  "dataset": "brats21",
+  "train": ["BraTS2021_00000", "BraTS2021_00001"],
+  "val": ["BraTS2021_00010"],
+  "test": []
+}

@@ -1,0 +1,7 @@
+{
+  "split_version": "v1",
+  "dataset": "acdc",
+  "train": ["patient001_frame01", "patient001_frame12"],
+  "val": ["patient002_frame01"],
+  "test": []
+}

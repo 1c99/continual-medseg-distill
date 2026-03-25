@@ -68,6 +68,13 @@ Set up an initial research scaffold for continual distillation in 3D CT/MRI segm
 
 ---
 
+## New update — split protocol layer
+- Added `docs/DATA_SPLIT_PROTOCOL.md` with patient-level, leakage-safe split rules.
+- Added example manifests:
+  - `data/splits/example_totalseg_split.json`
+  - `data/splits/example_brats21_split.json`
+  - `data/splits/example_acdc_split.json`
+
 ## Target Deliverables (Short-Term)
 - [ ] `v0.2`: KD baseline runnable on synthetic + config toggles
 - [ ] `v0.3`: Replay + KD combined training loop
