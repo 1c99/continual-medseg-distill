@@ -4,6 +4,61 @@ This file is updated alongside repository progress so experiment intent and impl
 
 ---
 
+## 2026-03-26 — Code-Only Sprint: 7 Engineering Upgrades
+
+### Summary
+Production infrastructure sprint: DDP support, memory-efficient 3D pipeline, teacher caching, ablation compiler, figure generation, experiment registry, and CI/CD. 23 new tests (126 total). All CPU-runnable. CUDA 12.2 torch compatibility fixed (torch 2.4.1+cu121).
+
+### Commit hashes by task
+
+| Task | Hash | Description |
+|------|------|-------------|
+| 1 | `583b882` | DDP support (DistributedContext, rank-safe, grad accum) |
+| 2 | `f95762c` | Patch sampler + OOM guard |
+| 3 | `5cdef1a` | Teacher cache (disk-backed, sample+config hash keys) |
+| 4 | `b828394` | Ablation matrix compiler (mean/std, NA handling) |
+| 5 | `3847a02` | BWT/FWT bars + stability-plasticity scatter |
+| 6 | `ebf7f09` | Experiment registry + status CLI |
+| 7 | `b37b799` | GitHub Actions CI + pre-commit hooks |
+| Tests | `0924037` | 23 new tests (126 total) |
+
+### Files changed by task
+
+| Task | Files |
+|------|-------|
+| 1 | `src/engine/distributed.py` (NEW) |
+| 2 | `src/data/patch_sampler.py` (NEW), `src/utils/memory_guard.py` (NEW) |
+| 3 | `src/methods/teacher_cache.py` (NEW) |
+| 4 | `scripts/compile_ablation_matrix.py` (NEW) |
+| 5 | `scripts/plot_results.py` (extended: BWT/FWT bars, stability-plasticity) |
+| 6 | `experiments/registry.yaml` (NEW), `scripts/experiment_status.py` (NEW) |
+| 7 | `.github/workflows/ci.yml` (NEW), `.pre-commit-config.yaml` (NEW) |
+| Tests | `tests/test_sprint_code.py` (NEW, 23 tests) |
+
+### Test summary (126/126 pass)
+
+| Suite | Tests |
+|-------|-------|
+| test_sprint_code.py | 23 |
+| test_phase_next.py | 34 |
+| test_teacher_and_kd.py | 26 |
+| test_multi_task.py | 13 |
+| test_metrics_edge_cases.py | 12 |
+| test_fisher_ewc.py | 8 |
+| test_dicece_loss.py | 5 |
+| test_reproducibility.py | 5 |
+
+### Known limitations
+1. DDP tested in disabled mode only (no multi-process launch in test env)
+2. AMP/grad checkpointing config parsed but not wired into training loop (toggle-ready)
+3. Teacher cache not auto-integrated into distill training_loss (opt-in API)
+4. Plot scripts require matplotlib (graceful skip if missing)
+
+### CUDA fix
+torch 2.11+cu130 was incompatible with system CUDA 12.2 (driver 535). Fixed: `pip install torch==2.4.1+cu121`. 4x RTX 3090 now available.
+
+---
+
 ## 2026-03-26 — Phase-Next: Architecture + Reproducibility Sprint
 
 ### Summary
@@ -595,8 +650,11 @@ Implemented the continual learning execution backbone: multi-task sequential tra
 - [x] `v2.1`: BWT/FWT metrics, plot_results.py
 - [x] `v2.2`: Config hash, resolved config persistence, path validation
 - [x] `v2.3`: 103 tests total (34 new: integration + smoke matrix)
-- [ ] `v2.4`: Real-data TotalSeg training run (pending GPU/CUDA driver)
-- [ ] `v2.5`: Multi-task ablation runner (all 4 methods × task sequence)
+- [x] `v2.4`: DDP support, patch sampler, OOM guard
+- [x] `v2.5`: Teacher cache, ablation matrix compiler
+- [x] `v2.6`: Experiment registry, CI/CD, 126 total tests
+- [ ] `v2.7`: Real-data TotalSeg training run (GPU ready, torch fixed)
+- [ ] `v2.8`: Multi-task ablation runner (all 4 methods × task sequence)
 
 ---
 
