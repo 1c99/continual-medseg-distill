@@ -21,6 +21,7 @@ import torch.nn.functional as F
 
 from .base import ContinualMethod
 from .teacher import Teacher
+from .teacher_cache import TeacherCache
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,19 @@ class DistillMethod(ContinualMethod):
             teacher_cfg = {**teacher_cfg, "use_features": True}
 
         self.teacher = Teacher(teacher_cfg=teacher_cfg)
+
+        # Teacher cache
+        cache_cfg = kd_cfg.get("cache", {})
+        self._cache_enabled = bool(cache_cfg.get("enabled", False))
+        self._cache: TeacherCache | None = None
+        if self._cache_enabled:
+            from src.utils.config_validation import compute_config_hash
+            cache_dir = cache_cfg.get("dir", "outputs/.teacher_cache")
+            cfg_hash = compute_config_hash(kd_cfg)
+            self._cache = TeacherCache(cache_dir, cfg_hash)
+            logger.info(f"Teacher cache: ON (dir={cache_dir}, hash={cfg_hash})")
+        else:
+            logger.debug("Teacher cache: OFF")
 
         # Student feature hooks (only for feature mode)
         self._student_hooks: List[torch.utils.hooks.RemovableHook] = []
@@ -254,8 +268,25 @@ class DistillMethod(ContinualMethod):
             self._remove_student_hooks()
             return ce
 
-        self.teacher.to(device)
-        teacher_logits = self.teacher(x)
+        # --- Teacher cache integration ---
+        teacher_logits = None
+        sample_ids = batch.get("id", [])
+        cache_hit = False
+
+        if self._cache is not None and len(sample_ids) == 1:
+            sid = sample_ids[0] if isinstance(sample_ids, list) else str(sample_ids)
+            cached = self._cache.get(str(sid))
+            if cached is not None:
+                teacher_logits = cached["logits"].to(device)
+                cache_hit = True
+
+        if teacher_logits is None:
+            self.teacher.to(device)
+            teacher_logits = self.teacher(x)
+            # Store in cache
+            if self._cache is not None and len(sample_ids) == 1:
+                sid = sample_ids[0] if isinstance(sample_ids, list) else str(sample_ids)
+                self._cache.put(str(sid), teacher_logits)
 
         kd = self._compute_kd_loss(student_logits, teacher_logits)
 
@@ -265,6 +296,14 @@ class DistillMethod(ContinualMethod):
     # ---- lifecycle ----
 
     def post_task_update(self, model: nn.Module, **kwargs) -> None:
+        # Log cache stats before invalidation
+        if self._cache is not None:
+            stats = self._cache.stats
+            logger.info(
+                f"Teacher cache stats: hits={stats['hits']}, misses={stats['misses']}, "
+                f"total={stats['total']}"
+            )
+            self._cache.invalidate()  # Teacher changed, cache invalid
         self.teacher.snapshot(model)
 
     def save_state(self, path: Path, model_template: nn.Module | None = None) -> None:

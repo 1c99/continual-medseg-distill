@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Dict, Any, Callable
 
@@ -8,14 +10,18 @@ from tqdm import tqdm
 
 from src.utils.metrics import CSVMetricsLogger
 
+trainer_logger = logging.getLogger(__name__)
+
 
 def _save_checkpoint(path: Path, model: torch.nn.Module, optimizer: torch.optim.Optimizer, epoch: int, global_step: int, best_metric: float | None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Unwrap DDP if needed
+    state_model = model.module if hasattr(model, "module") else model
     torch.save(
         {
             "epoch": epoch,
             "global_step": global_step,
-            "model_state_dict": model.state_dict(),
+            "model_state_dict": state_model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "best_metric": best_metric,
         },
@@ -74,6 +80,7 @@ def train(
     dry_run: bool = False,
     val_loader=None,
     evaluate_fn: Callable | None = None,
+    dist_ctx=None,
 ):
     tcfg = cfg.get("train", {})
     device = cfg.get("runtime", {}).get("device", "cpu")
@@ -97,6 +104,30 @@ def train(
         mode=es_cfg.get("mode", "max"),
     )
 
+    # --- AMP setup ---
+    amp_enabled = bool(tcfg.get("amp", {}).get("enabled", False))
+    amp_dtype = torch.float16
+    use_cuda = device != "cpu" and torch.cuda.is_available()
+    scaler = torch.cuda.amp.GradScaler(enabled=(amp_enabled and use_cuda))
+    amp_ctx = torch.cuda.amp.autocast(enabled=(amp_enabled and use_cuda), dtype=amp_dtype) if use_cuda else nullcontext()
+    logger.info(f"AMP: {'ON' if (amp_enabled and use_cuda) else 'OFF'}")
+
+    # --- Gradient checkpointing ---
+    grad_ckpt_enabled = bool(tcfg.get("grad_checkpoint", {}).get("enabled", False))
+    if grad_ckpt_enabled:
+        raw_model = model.module if hasattr(model, "module") else model
+        if hasattr(raw_model, "gradient_checkpointing_enable"):
+            raw_model.gradient_checkpointing_enable()
+            logger.info("Gradient checkpointing: ON (model native)")
+        else:
+            logger.info("Gradient checkpointing: ON (manual torch.utils.checkpoint)")
+    else:
+        logger.info("Gradient checkpointing: OFF")
+
+    # --- DDP context ---
+    is_main = dist_ctx.is_main_process() if dist_ctx else True
+    grad_accum_steps = dist_ctx.grad_accum_steps if dist_ctx else 1
+
     model.to(device)
     model.train()
 
@@ -109,22 +140,33 @@ def train(
     best_metric = None
 
     for epoch in range(epochs):
-        pbar = tqdm(train_loader, desc=f"epoch {epoch+1}/{epochs}")
+        pbar = tqdm(train_loader, desc=f"epoch {epoch+1}/{epochs}", disable=not is_main)
         loss_sum = 0.0
         steps = 0
 
         for i, batch in enumerate(pbar):
             if i >= max_steps:
                 break
-            optimizer.zero_grad()
-            loss = method.training_loss(model, batch, device)
-            loss.backward()
-            optimizer.step()
+
+            with amp_ctx:
+                loss = method.training_loss(model, batch, device)
+
+            if grad_accum_steps > 1:
+                loss = loss / grad_accum_steps
+
+            scaler.scale(loss).backward()
+
+            if (i + 1) % grad_accum_steps == 0 or (i + 1) == max_steps:
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
+
             global_step += 1
-            loss_val = float(loss.item())
+            loss_val = float(loss.item()) * grad_accum_steps  # undo scaling for logging
             loss_sum += loss_val
             steps += 1
-            pbar.set_postfix(loss=loss_val, step=global_step)
+            if is_main:
+                pbar.set_postfix(loss=loss_val, step=global_step)
 
         train_loss = loss_sum / max(steps, 1)
         row = {"epoch": epoch + 1, "train_loss": train_loss}
@@ -139,16 +181,16 @@ def train(
                 else:
                     row[f"val_{k}"] = v
 
-        metrics_logger.log(row)
-
-        _save_checkpoint(
-            ckpt_dir / "last.pt",
-            model=model,
-            optimizer=optimizer,
-            epoch=epoch + 1,
-            global_step=global_step,
-            best_metric=best_metric,
-        )
+        if is_main:
+            metrics_logger.log(row)
+            _save_checkpoint(
+                ckpt_dir / "last.pt",
+                model=model,
+                optimizer=optimizer,
+                epoch=epoch + 1,
+                global_step=global_step,
+                best_metric=best_metric,
+            )
 
         current = eval_metrics.get(best_metric_key)
         improved = False
@@ -162,27 +204,31 @@ def train(
 
         if improved:
             best_metric = current
-            _save_checkpoint(
-                ckpt_dir / "best.pt",
-                model=model,
-                optimizer=optimizer,
-                epoch=epoch + 1,
-                global_step=global_step,
-                best_metric=best_metric,
-            )
-            logger.info(f"saved best checkpoint ({best_metric_key}={best_metric:.4f})")
+            if is_main:
+                _save_checkpoint(
+                    ckpt_dir / "best.pt",
+                    model=model,
+                    optimizer=optimizer,
+                    epoch=epoch + 1,
+                    global_step=global_step,
+                    best_metric=best_metric,
+                )
+                logger.info(f"saved best checkpoint ({best_metric_key}={best_metric:.4f})")
 
-        logger.info(f"epoch={epoch+1} done train_loss={train_loss:.4f}")
+        if is_main:
+            logger.info(f"epoch={epoch+1} done train_loss={train_loss:.4f}")
 
         if dry_run:
-            logger.info("dry-run enabled; stopping after one epoch")
+            if is_main:
+                logger.info("dry-run enabled; stopping after one epoch")
             break
 
         if early_stopper.step(eval_metrics):
-            logger.info(
-                f"Early stopping triggered after {epoch+1} epochs "
-                f"(patience={early_stopper.patience}, metric={early_stopper.metric})"
-            )
+            if is_main:
+                logger.info(
+                    f"Early stopping triggered after {epoch+1} epochs "
+                    f"(patience={early_stopper.patience}, metric={early_stopper.metric})"
+                )
             break
 
     method.post_task_update(model, train_loader=train_loader)

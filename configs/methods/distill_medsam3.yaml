@@ -1,0 +1,28 @@
+# Distillation with MedSAM3-like teacher checkpoint
+# Usage: --method-config configs/methods/distill_medsam3.yaml
+#
+# The teacher checkpoint should be a .pt file containing either:
+#   - {"model_state_dict": ...}  (standard format)
+#   - raw state_dict             (fallback)
+#
+# The model architecture must match model.{in_channels, out_channels, channels, strides}
+# since the teacher is loaded into the same UNet architecture.
+#
+# For a real MedSAM3 teacher with different architecture, implement a
+# custom model in src/models/factory.py and set model.name accordingly.
+
+method:
+  name: distill
+  kd:
+    mode: logit
+    weight: 0.7
+    temperature: 2.0
+    cache:
+      enabled: true
+      dir: outputs/.teacher_cache
+    teacher:
+      type: checkpoint
+      ckpt_path: checkpoints/medsam3_teacher.pt   # UPDATE to actual path
+      model_id: medsam3_pretrained
+      # use_features: true                        # uncomment for feature KD
+      # feature_layers: ["model.1", "model.2"]    # layer prefixes to hook
