@@ -4,6 +4,101 @@ This file is updated alongside repository progress so experiment intent and impl
 
 ---
 
+## 2026-03-26 — M2 Achieved: Real-Data Validation on Workstation
+
+### Summary
+First real-data validation pass completed on workstation. TotalSegmentator and BraTS21 datasets validated end-to-end through the data pipeline (path checks + sample loading + shape/label verification). BraTS21 adapter extended to support flat nnUNet-style layout found on disk. ACDC dataset not present on this workstation.
+
+### Data Discovery (workstation: /media/user/data2/data2/data)
+
+| Dataset | Path | Subjects | Layout | Validation Status |
+|---------|------|----------|--------|-------------------|
+| TotalSegmentator | `Totalsegmentator_dataset/` | 1204 | `sXXXX/ct.nii.gz` + `sXXXX/segmentations/liver.nii.gz` | PASS |
+| BraTS21 | `Brats21/` | 1151 (all 4 modalities) | flat: `imagesTr/`, `etc/images_flair/`, `etc/images_t2/`, `etc/labels_4cls/` | PASS (after adapter fix) |
+| ACDC | Not present | 0 | N/A | BLOCKED — not on disk |
+
+### TotalSegmentator Smoke Report
+- 25/25 smoke-split subjects found on disk
+- 5 subjects loaded through adapter successfully
+- Volume shapes after crop/pad: (1, 128, 128, 128)
+- Label values: {0, 1} (binary liver segmentation)
+- No missing files or blockers
+
+### BraTS21 Smoke Report
+- 25/25 smoke-split subjects found on disk
+- 5 subjects loaded through adapter successfully
+- Volume shapes after crop/pad: (4, 128, 128, 128) — 4 MRI modalities
+- Label values: {0, 1, 2, 3} (after standard 4→3 remap)
+- No missing files or blockers
+
+### What was implemented
+
+**BraTS21 flat-layout adapter**
+- `src/data/brats21.py`: Added `layout` parameter (`per_case` | `flat`). New `_resolve_paths()` method handles scattered file locations:
+  - t1: `imagesTr/{sid}_t1_0000.nii.gz`
+  - t1ce: `imagesTr/{sid}_t1ce_0000.nii.gz`
+  - flair: `etc/images_flair/{sid}_0000.nii.gz`
+  - t2: `etc/images_t2/{sid}_0000.nii.gz`
+  - seg: `etc/labels_4cls/{sid}_seg.nii.gz`
+- `src/data/registry.py`: Passes `layout` config to BraTS adapter
+- `scripts/validate_data.py`: Updated path checker for flat layout
+
+**Dataset configs and split manifests (workstation-specific)**
+- `configs/datasets/totalseg_workstation.yaml` — smoke config (25 subjects)
+- `configs/datasets/brats21_workstation.yaml` — smoke config (25 subjects)
+- `configs/datasets/totalseg_train.yaml` — training config (100 train / 20 val)
+- `configs/datasets/brats21_train.yaml` — training config (100 train / 20 val)
+- `data/splits/totalseg_smoke.json` — 20 train / 5 val smoke split
+- `data/splits/brats21_smoke.json` — 20 train / 5 val smoke split
+- `data/splits/totalseg_train_v1.json` — 100 train / 20 val, seed=42
+- `data/splits/brats21_train_v1.json` — 100 train / 20 val, seed=42
+
+### Synthetic ablation re-verified (4/4 pass)
+
+| Method | Dice Mean | HD95 Mean | Train Loss | Status |
+|--------|-----------|-----------|------------|--------|
+| finetune | 0.370 | 1.000 | 1.803 | ok |
+| replay | 0.371 | 1.000 | 3.588 | ok |
+| distill | 0.370 | 1.000 | 1.803 | ok |
+| distill_replay_ewc | 0.371 | 1.000 | 3.588 | ok |
+
+### Test summary (43/43 pass)
+
+| Test suite | Tests | Status |
+|-----------|-------|--------|
+| test_dicece_loss.py | 5 | PASS |
+| test_fisher_ewc.py | 8 | PASS |
+| test_metrics_edge_cases.py | 12 | PASS |
+| test_multi_task.py | 13 | PASS |
+| test_reproducibility.py | 5 | PASS |
+
+### Commands used
+```bash
+# Environment
+conda create -y -p .venv python=3.10
+pip install -e .
+python scripts/doctor.py --dataset-root /media/user/data2/data2/data
+
+# Real-data validation
+python scripts/validate_data.py --dataset-config configs/datasets/totalseg_workstation.yaml --max-subjects 5 --output outputs/reports/totalseg_smoke_report.md
+python scripts/validate_data.py --dataset-config configs/datasets/brats21_workstation.yaml --max-subjects 5 --output outputs/reports/brats21_smoke_report.md
+
+# Synthetic ablation
+python scripts/run_ablations.py --base-config configs/base.yaml --synthetic
+```
+
+### Blockers
+1. **ACDC dataset not on disk** — cannot validate or run experiments for this task
+2. **CUDA driver mismatch** — workstation CUDA driver (12020) too old for torch 2.11; training runs on CPU. GPU experiments need driver update.
+3. **No real-data training run yet** — configs and splits ready, but no training executed (CPU-only would be too slow for 128^3 volumes)
+
+### Next top 3 actions
+1. Update CUDA driver on workstation to enable GPU training, then run first real-data TotalSeg baseline
+2. Acquire ACDC dataset or adjust task sequence to CT-only (TotalSeg → TotalSeg-hard → BraTS21)
+3. Run multi-task ablation with `run_task_sequence()` on TotalSeg → BraTS21 sequence
+
+---
+
 ## 2026-03-26 — Baseline Suite Starter + Runbook
 
 ### Summary
@@ -330,8 +425,9 @@ Implemented the continual learning execution backbone: multi-task sequential tra
 - [x] `v1.0`: Multi-task sequence orchestrator with per-task evaluation
 - [x] `v1.1`: Teacher/Fisher/memory checkpoint persistence (save/load)
 - [x] `v1.2`: Forgetting measurement (backward transfer matrix + per-task + mean)
-- [ ] `v1.3`: Real-data TotalSeg run with split-manifest (pending workstation)
-- [ ] `v1.4`: Multi-task ablation runner (all 4 methods × task sequence)
+- [x] `v1.3`: Real-data validation (M2) — TotalSeg + BraTS21 validated on workstation
+- [ ] `v1.4`: Real-data TotalSeg training run (pending GPU/CUDA driver)
+- [ ] `v1.5`: Multi-task ablation runner (all 4 methods × task sequence)
 
 ---
 
