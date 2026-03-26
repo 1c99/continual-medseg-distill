@@ -1,0 +1,14 @@
+{
+  "split_version": "smoke_v1",
+  "dataset": "brats21",
+  "description": "Smoke split for workstation validation (20 train / 5 val)",
+  "train": [
+    "BraTS2021_00000", "BraTS2021_00002", "BraTS2021_00003", "BraTS2021_00005", "BraTS2021_00006",
+    "BraTS2021_00008", "BraTS2021_00009", "BraTS2021_00011", "BraTS2021_00012", "BraTS2021_00014",
+    "BraTS2021_00016", "BraTS2021_00017", "BraTS2021_00018", "BraTS2021_00019", "BraTS2021_00020",
+    "BraTS2021_00021", "BraTS2021_00022", "BraTS2021_00024", "BraTS2021_00025", "BraTS2021_00026"
+  ],
+  "val": [
+    "BraTS2021_00028", "BraTS2021_00030", "BraTS2021_00031", "BraTS2021_00032", "BraTS2021_00033"
+  ]
+}

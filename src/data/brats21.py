@@ -10,14 +10,19 @@ from torch.utils.data import Dataset
 
 
 class Brats21Dataset(Dataset):
-    """Scaffold-level BraTS 2021 dataset adapter (local-path only).
+    """BraTS 2021 dataset adapter (local-path only).
 
-    Expected case layout (under ``root/<case_id>/``):
-      - <case_id>_t1.nii.gz
-      - <case_id>_t1ce.nii.gz
-      - <case_id>_t2.nii.gz
-      - <case_id>_flair.nii.gz
-      - <case_id>_seg.nii.gz
+    Supports two on-disk layouts via the ``layout`` parameter:
+
+    ``per_case`` (default):
+      ``root/<case_id>/<case_id>_t1.nii.gz``, etc.
+
+    ``flat`` (nnUNet-style, e.g. BraTS21 challenge download):
+      - ``root/imagesTr/<case_id>_t1_0000.nii.gz``   (t1)
+      - ``root/imagesTr/<case_id>_t1ce_0000.nii.gz``  (t1ce)
+      - ``root/etc/images_flair/<case_id>_0000.nii.gz`` (flair)
+      - ``root/etc/images_t2/<case_id>_0000.nii.gz``    (t2)
+      - ``root/etc/labels_4cls/<case_id>_seg.nii.gz``   (seg)
 
     Returns dict with keys: image (C,Z,Y,X), label (Z,Y,X), id.
     """
@@ -30,6 +35,7 @@ class Brats21Dataset(Dataset):
         split_ids: Sequence[str],
         target_shape: tuple[int, int, int] = (128, 128, 128),
         normalize_per_channel: bool = True,
+        layout: str = "per_case",
     ):
         self.root = Path(root)
         if not self.root.exists():
@@ -37,6 +43,10 @@ class Brats21Dataset(Dataset):
                 f"BraTS root directory not found: {self.root}. "
                 "Set data.brats21.root to a valid local path."
             )
+
+        if layout not in ("per_case", "flat"):
+            raise ValueError(f"Unsupported BraTS layout '{layout}'. Use 'per_case' or 'flat'.")
+        self.layout = layout
 
         self.ids = [str(x) for x in split_ids]
         if not self.ids:
@@ -80,18 +90,29 @@ class Brats21Dataset(Dataset):
     def _zscore(v: np.ndarray) -> np.ndarray:
         return (v - v.mean()) / (v.std() + 1e-6)
 
+    def _resolve_paths(self, sid: str):
+        """Return (modality_paths_dict, seg_path) for the given subject ID."""
+        if self.layout == "per_case":
+            case_dir = self.root / sid
+            mod_paths = {m: case_dir / f"{sid}_{m}.nii.gz" for m in self.MODALITIES}
+            seg_path = case_dir / f"{sid}_seg.nii.gz"
+        else:  # flat
+            mod_paths = {
+                "t1": self.root / "imagesTr" / f"{sid}_t1_0000.nii.gz",
+                "t1ce": self.root / "imagesTr" / f"{sid}_t1ce_0000.nii.gz",
+                "flair": self.root / "etc" / "images_flair" / f"{sid}_0000.nii.gz",
+                "t2": self.root / "etc" / "images_t2" / f"{sid}_0000.nii.gz",
+            }
+            seg_path = self.root / "etc" / "labels_4cls" / f"{sid}_seg.nii.gz"
+        return mod_paths, seg_path
+
     def __getitem__(self, idx: int):
         sid = self.ids[idx]
-        case_dir = self.root / sid
-        if not case_dir.exists():
-            raise FileNotFoundError(
-                f"BraTS case directory not found: {case_dir}. "
-                "Check split IDs against data.brats21.root."
-            )
+        mod_paths, seg_path = self._resolve_paths(sid)
 
         channels: list[np.ndarray] = []
         for m in self.MODALITIES:
-            p = case_dir / f"{sid}_{m}.nii.gz"
+            p = mod_paths[m]
             vol = self._load_nii(p)
             if vol.ndim != 3:
                 raise ValueError(
@@ -102,7 +123,6 @@ class Brats21Dataset(Dataset):
                 vol = self._zscore(vol)
             channels.append(vol)
 
-        seg_path = case_dir / f"{sid}_seg.nii.gz"
         seg = self._load_nii(seg_path)
         if seg.ndim != 3:
             raise ValueError(

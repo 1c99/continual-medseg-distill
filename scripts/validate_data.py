@@ -43,8 +43,16 @@ def _expected_files_totalseg(root: Path, sid: str, organ: str) -> List[Path]:
     ]
 
 
-def _expected_files_brats21(root: Path, sid: str) -> List[Path]:
+def _expected_files_brats21(root: Path, sid: str, layout: str = "per_case") -> List[Path]:
     """Return list of files a BraTS21 subject should have."""
+    if layout == "flat":
+        return [
+            root / "imagesTr" / f"{sid}_t1_0000.nii.gz",
+            root / "imagesTr" / f"{sid}_t1ce_0000.nii.gz",
+            root / "etc" / "images_flair" / f"{sid}_0000.nii.gz",
+            root / "etc" / "images_t2" / f"{sid}_0000.nii.gz",
+            root / "etc" / "labels_4cls" / f"{sid}_seg.nii.gz",
+        ]
     base = root / sid
     files = [base / f"{sid}_{mod}.nii.gz" for mod in ("t1", "t1ce", "t2", "flair")]
     files.append(base / f"{sid}_seg.nii.gz")
@@ -153,12 +161,13 @@ def validate_paths(
         return result
 
     organ = source_cfg.get("organ", "liver") if source == "totalseg" else None
+    layout = source_cfg.get("layout", "per_case") if source == "brats21" else None
 
     for sid in all_ids:
         if source == "totalseg":
             expected = _expected_files_totalseg(root_path, sid, organ)
         elif source == "brats21":
-            expected = _expected_files_brats21(root_path, sid)
+            expected = _expected_files_brats21(root_path, sid, layout=layout)
         elif source == "acdc":
             expected = _expected_files_acdc(root_path, sid)
         else:
@@ -250,6 +259,7 @@ def _build_dataset(source: str, source_cfg: Dict[str, Any], ids: List[str]):
             split_ids=ids,
             target_shape=tuple(source_cfg.get("shape", [128, 128, 128])),
             normalize_per_channel=bool(source_cfg.get("normalize_per_channel", True)),
+            layout=source_cfg.get("layout", "per_case"),
         )
     elif source == "acdc":
         from src.data.acdc import ACDCDataset

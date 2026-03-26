@@ -146,17 +146,21 @@ def create_loaders(cfg: Dict) -> Tuple[DataLoader, DataLoader]:
         shape = tuple(bcfg.get("shape", [128, 128, 128]))
         normalize_per_channel = bool(bcfg.get("normalize_per_channel", True))
 
+        layout = bcfg.get("layout", "per_case")
+
         train_ds = Brats21Dataset(
             root=root,
             split_ids=train_ids,
             target_shape=shape,
             normalize_per_channel=normalize_per_channel,
+            layout=layout,
         )
         val_ds = Brats21Dataset(
             root=root,
             split_ids=val_ids,
             target_shape=shape,
             normalize_per_channel=normalize_per_channel,
+            layout=layout,
         )
     elif source == "acdc":
         acfg = data_cfg.get("acdc", {})

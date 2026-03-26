@@ -1,0 +1,11 @@
+data:
+  source: totalseg
+  totalseg:
+    root: /media/user/data2/data2/data/Totalsegmentator_dataset
+    organ: liver
+    shape: [128, 128, 128]
+    split_manifest: data/splits/totalseg_smoke.json
+
+model:
+  in_channels: 1
+  out_channels: 2

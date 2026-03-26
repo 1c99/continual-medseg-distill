@@ -1,0 +1,22 @@
+# BraTS21 training config (100 train / 20 val, 4-class segmentation)
+# Workstation: /media/user/data2/data2/data
+# Layout: flat (nnUNet-style scattered directories)
+data:
+  source: brats21
+  batch_size: 2
+  val_batch_size: 2
+  brats21:
+    root: /media/user/data2/data2/data/Brats21
+    layout: flat
+    shape: [128, 128, 128]
+    normalize_per_channel: true
+    split_manifest: data/splits/brats21_train_v1.json
+
+model:
+  in_channels: 4
+  out_channels: 4
+
+train:
+  epochs: 50
+  lr: 0.001
+  loss_type: dicece
