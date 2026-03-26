@@ -36,6 +36,12 @@ continual-medseg-distill/
     utils/
 ```
 
+## Environment preflight
+
+```bash
+python scripts/doctor.py --dataset-root /media/user/data2/data2/data
+```
+
 ## Setup
 
 ### Option A: editable install
