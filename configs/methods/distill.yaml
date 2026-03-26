@@ -1,5 +1,13 @@
 method:
   name: distill
   kd:
+    mode: logit         # logit | feature | weighted | boundary
     weight: 0.7
     temperature: 2.0
+    # feature_weight: 1.0       # (feature mode only)
+    # boundary_sigma: 1.0       # (boundary mode only)
+    teacher:
+      type: snapshot           # snapshot | checkpoint
+      # ckpt_path: /path/to/teacher.pt  # (required if type=checkpoint)
+      # use_features: false    # enable for feature KD
+      # feature_layers: []     # layer name prefixes to hook

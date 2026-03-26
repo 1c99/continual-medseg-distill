@@ -3,6 +3,8 @@
 Trains a single model on a sequence of tasks, calling post_task_update()
 between tasks, evaluating on all seen tasks after each, and computing
 forgetting metrics.
+
+Supports resuming from an interrupted run via task progress index.
 """
 from __future__ import annotations
 
@@ -18,6 +20,12 @@ from src.data.registry import create_loaders
 from src.engine.trainer import train
 from src.utils.config import merge_dicts
 
+_PROGRESS_FILE = "task_progress.json"
+
+
+# ---------------------------------------------------------------------------
+# Task checkpoint helpers
+# ---------------------------------------------------------------------------
 
 def _save_task_checkpoint(
     path: Path,
@@ -42,6 +50,61 @@ def _save_task_checkpoint(
         method.save_state(method_state_path)
 
 
+def _load_task_checkpoint(
+    path: Path,
+    model: torch.nn.Module,
+    method,
+    task_id: str,
+) -> None:
+    """Restore model and method state from a task checkpoint."""
+    state = torch.load(path, map_location="cpu", weights_only=False)
+    model.load_state_dict(state["model_state_dict"])
+
+    method_state_path = path.parent / f"method_state_{task_id}.pt"
+    if method_state_path.exists():
+        try:
+            method.load_state(method_state_path, model_template=model)
+        except TypeError:
+            method.load_state(method_state_path)
+
+
+# ---------------------------------------------------------------------------
+# Task progress tracking (for resume)
+# ---------------------------------------------------------------------------
+
+def _save_progress(
+    output_dir: Path,
+    completed_task_idx: int,
+    task_id: str,
+    task_order: List[str],
+    task_eval_history: Dict[str, Dict[str, Dict[str, float]]],
+) -> None:
+    """Persist progress to allow resume after interruption."""
+    progress = {
+        "completed_task_idx": completed_task_idx,
+        "last_completed_task_id": task_id,
+        "task_order_so_far": task_order,
+        "task_eval_history": task_eval_history,
+    }
+    path = output_dir / _PROGRESS_FILE
+    path.write_text(json.dumps(progress, indent=2, default=str), encoding="utf-8")
+
+
+def _load_progress(output_dir: Path) -> Dict[str, Any] | None:
+    """Load progress from a previous interrupted run. Returns None if no progress."""
+    path = output_dir / _PROGRESS_FILE
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Forgetting computation
+# ---------------------------------------------------------------------------
+
 def compute_forgetting(
     task_eval_history: Dict[str, Dict[str, Dict[str, float]]],
     task_order: List[str],
@@ -57,7 +120,6 @@ def compute_forgetting(
     Returns:
         Dict with 'matrix' (task x task), 'per_task' forgetting, 'mean' forgetting.
     """
-    n = len(task_order)
     matrix: Dict[str, Dict[str, float | None]] = {}
     forgetting_per_task: Dict[str, float] = {}
 
@@ -92,6 +154,10 @@ def compute_forgetting(
     }
 
 
+# ---------------------------------------------------------------------------
+# Evidence output writers
+# ---------------------------------------------------------------------------
+
 def _write_task_results(
     output_dir: Path,
     task_order: List[str],
@@ -114,7 +180,6 @@ def _write_task_results(
                 **{f"val_{k}": v for k, v in evals.items()
                    if not isinstance(v, dict)},
             }
-            # Flatten nested dicts (dice_per_class, hd95_per_class)
             for k, v in evals.items():
                 if isinstance(v, dict):
                     for sub_k, sub_v in v.items():
@@ -122,7 +187,7 @@ def _write_task_results(
             rows.append(row)
 
     if rows:
-        all_keys = []
+        all_keys: List[str] = []
         for r in rows:
             for k in r:
                 if k not in all_keys:
@@ -135,7 +200,9 @@ def _write_task_results(
 
     # Forgetting JSON
     forg_path = output_dir / "forgetting.json"
-    forg_path.write_text(json.dumps(forgetting, indent=2, default=str), encoding="utf-8")
+    forg_path.write_text(
+        json.dumps(forgetting, indent=2, default=str), encoding="utf-8"
+    )
 
     # Summary JSON
     summary = {
@@ -150,6 +217,10 @@ def _write_task_results(
     )
 
 
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
+
 def run_task_sequence(
     model: torch.nn.Module,
     method,
@@ -159,6 +230,7 @@ def run_task_sequence(
     evaluate_fn: Callable,
     output_dir: Path,
     dry_run: bool = False,
+    resume: bool = False,
 ) -> Dict[str, Any]:
     """Run a sequence of tasks with continual learning.
 
@@ -171,6 +243,7 @@ def run_task_sequence(
         evaluate_fn: Evaluation function (model, loader, cfg, logger) -> dict.
         output_dir: Root output directory for all task outputs.
         dry_run: If True, limits training steps.
+        resume: If True, attempt to resume from last completed task.
 
     Returns:
         Dict with per-task results, forgetting metrics, and paths.
@@ -178,14 +251,72 @@ def run_task_sequence(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    task_order = []
-    val_loaders: Dict[str, Any] = {}  # task_id -> (val_loader, task_cfg)
+    task_order: List[str] = []
+    val_loaders: Dict[str, Any] = {}
     task_eval_history: Dict[str, Dict[str, Dict[str, float]]] = {}
+    start_idx = 0
 
-    for task_idx, task_override in enumerate(task_configs):
+    # ---- resume logic ----
+    if resume:
+        progress = _load_progress(output_dir)
+        if progress is not None:
+            completed_idx = progress["completed_task_idx"]
+            start_idx = completed_idx + 1
+            task_order = progress["task_order_so_far"]
+            task_eval_history = progress["task_eval_history"]
+
+            if start_idx >= len(task_configs):
+                logger.info("All tasks already completed. Nothing to resume.")
+                forgetting = compute_forgetting(task_eval_history, task_order)
+                return {
+                    "task_order": task_order,
+                    "eval_history": task_eval_history,
+                    "forgetting": forgetting,
+                    "output_dir": str(output_dir),
+                    "resumed": True,
+                }
+
+            # Restore model and method state from last completed task
+            last_task_id = progress["last_completed_task_id"]
+            ckpt_path = (
+                output_dir
+                / last_task_id
+                / "checkpoints"
+                / f"after_{last_task_id}.pt"
+            )
+            if ckpt_path.exists():
+                _load_task_checkpoint(ckpt_path, model, method, last_task_id)
+                logger.info(
+                    f"Resumed from task {start_idx}/{len(task_configs)} "
+                    f"(after {last_task_id})"
+                )
+            else:
+                logger.warning(
+                    f"Resume requested but checkpoint {ckpt_path} not found. "
+                    "Starting from scratch."
+                )
+                start_idx = 0
+                task_order = []
+                task_eval_history = {}
+
+            # Rebuild val_loaders for already-completed tasks
+            for prev_idx in range(start_idx):
+                prev_override = task_configs[prev_idx]
+                prev_task_id = prev_override.get("id", f"task_{prev_idx}")
+                prev_cfg = merge_dicts(global_cfg, prev_override)
+                _, prev_val_loader = create_loaders(prev_cfg)
+                val_loaders[prev_task_id] = (prev_val_loader, prev_cfg)
+        else:
+            logger.info("No previous progress found. Starting from scratch.")
+
+    # ---- task loop ----
+    for task_idx in range(start_idx, len(task_configs)):
+        task_override = task_configs[task_idx]
         task_id = task_override.get("id", f"task_{task_idx}")
         task_order.append(task_id)
-        logger.info(f"=== Task {task_idx + 1}/{len(task_configs)}: {task_id} ===")
+        logger.info(
+            f"=== Task {task_idx + 1}/{len(task_configs)}: {task_id} ==="
+        )
 
         # Build task-specific config
         task_cfg = merge_dicts(global_cfg, task_override)
@@ -223,9 +354,17 @@ def run_task_sequence(
         # Save task checkpoint + method state
         _save_task_checkpoint(
             task_output / "checkpoints" / f"after_{task_id}.pt",
-            model, method, task_idx, task_id,
+            model,
+            method,
+            task_idx,
+            task_id,
         )
-        logger.info(f"  checkpoint saved: {task_output / 'checkpoints'}")
+
+        # Save progress for resume
+        _save_progress(
+            output_dir, task_idx, task_id, task_order, task_eval_history
+        )
+        logger.info(f"  checkpoint + progress saved: {task_output / 'checkpoints'}")
 
     # Compute forgetting
     forgetting = compute_forgetting(task_eval_history, task_order)
@@ -240,4 +379,5 @@ def run_task_sequence(
         "eval_history": task_eval_history,
         "forgetting": forgetting,
         "output_dir": str(output_dir),
+        "resumed": start_idx > 0,
     }

@@ -1,0 +1,196 @@
+"""Strict config schema validation.
+
+Call ``validate_config(cfg)`` before training to fail fast with
+actionable error messages for missing or incompatible settings.
+"""
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Any, Dict, List
+
+logger = logging.getLogger(__name__)
+
+
+class ConfigError(ValueError):
+    """Raised when config validation fails."""
+    pass
+
+
+# ---------------------------------------------------------------------------
+# Individual validators
+# ---------------------------------------------------------------------------
+
+def _require(cfg: Dict, dotpath: str, context: str = "") -> Any:
+    """Walk *cfg* along *dotpath* (e.g. ``"method.kd.weight"``).
+
+    Raises ConfigError if any segment is missing.
+    """
+    keys = dotpath.split(".")
+    node = cfg
+    traversed: List[str] = []
+    for k in keys:
+        traversed.append(k)
+        if not isinstance(node, dict) or k not in node:
+            msg = f"Missing required config key: {dotpath}"
+            if context:
+                msg += f" ({context})"
+            raise ConfigError(msg)
+        node = node[k]
+    return node
+
+
+def _validate_model(cfg: Dict) -> List[str]:
+    errors: List[str] = []
+    mcfg = cfg.get("model", {})
+    if "out_channels" not in mcfg:
+        errors.append("model.out_channels is required")
+    if "in_channels" not in mcfg:
+        errors.append("model.in_channels is required")
+    out_ch = mcfg.get("out_channels", 0)
+    if isinstance(out_ch, int) and out_ch < 2:
+        errors.append(
+            f"model.out_channels={out_ch} is too low for segmentation (min 2)"
+        )
+    return errors
+
+
+def _validate_data(cfg: Dict) -> List[str]:
+    errors: List[str] = []
+    data_cfg = cfg.get("data", {})
+    source = data_cfg.get("source")
+    if not source:
+        errors.append("data.source is required (synthetic, totalseg, brats21, acdc)")
+        return errors
+
+    if source == "synthetic":
+        return errors
+
+    source_cfg = data_cfg.get(source, {})
+    if not source_cfg.get("root"):
+        errors.append(f"data.{source}.root is required for source={source}")
+
+    has_manifest = bool(source_cfg.get("split_manifest"))
+    has_ids = bool(source_cfg.get("train_ids")) and bool(source_cfg.get("val_ids"))
+    if not has_manifest and not has_ids:
+        errors.append(
+            f"data.{source} needs either split_manifest or train_ids+val_ids"
+        )
+
+    if has_manifest:
+        manifest_path = source_cfg["split_manifest"]
+        p = Path(manifest_path)
+        if not p.is_absolute():
+            # Will be resolved relative to repo root at runtime, just check format
+            if not p.suffix in {".json", ".yaml", ".yml"}:
+                errors.append(
+                    f"data.{source}.split_manifest must be .json/.yaml/.yml, "
+                    f"got '{p.suffix}'"
+                )
+
+    return errors
+
+
+def _validate_method(cfg: Dict) -> List[str]:
+    errors: List[str] = []
+    mcfg = cfg.get("method", {})
+    name = mcfg.get("name")
+    if not name:
+        errors.append("method.name is required")
+        return errors
+
+    valid_methods = {"finetune", "replay", "distill", "distill_replay_ewc"}
+    if name not in valid_methods:
+        errors.append(f"method.name='{name}' is not supported. Valid: {valid_methods}")
+        return errors
+
+    if name in {"distill", "distill_replay_ewc"}:
+        kd_cfg = mcfg.get("kd", {})
+        mode = kd_cfg.get("mode", "logit")
+        valid_modes = {"logit", "feature", "weighted", "boundary"}
+        if mode not in valid_modes:
+            errors.append(
+                f"method.kd.mode='{mode}' is invalid. Valid: {valid_modes}"
+            )
+
+        teacher_cfg = kd_cfg.get("teacher", {})
+        teacher_type = teacher_cfg.get("type", "snapshot")
+        if teacher_type not in {"snapshot", "checkpoint"}:
+            errors.append(
+                f"method.kd.teacher.type='{teacher_type}' invalid. "
+                "Use 'snapshot' or 'checkpoint'."
+            )
+        if teacher_type == "checkpoint" and not teacher_cfg.get("ckpt_path"):
+            errors.append(
+                "method.kd.teacher.ckpt_path is required when teacher.type=checkpoint"
+            )
+
+        if mode == "feature":
+            if not teacher_cfg.get("feature_layers"):
+                errors.append(
+                    "method.kd.teacher.feature_layers is required when kd.mode=feature"
+                )
+
+    if name in {"replay", "distill_replay_ewc"}:
+        replay_cfg = mcfg.get("replay", {})
+        buf_size = replay_cfg.get("buffer_size", 64)
+        if isinstance(buf_size, int) and buf_size < 1:
+            errors.append(
+                f"method.replay.buffer_size={buf_size} must be >= 1"
+            )
+
+    if name == "distill_replay_ewc":
+        ewc_cfg = mcfg.get("ewc", {})
+        fisher_samples = ewc_cfg.get("fisher_samples", 64)
+        if isinstance(fisher_samples, int) and fisher_samples < 1:
+            errors.append(
+                f"method.ewc.fisher_samples={fisher_samples} must be >= 1"
+            )
+
+    return errors
+
+
+def _validate_train(cfg: Dict) -> List[str]:
+    errors: List[str] = []
+    tcfg = cfg.get("train", {})
+    epochs = tcfg.get("epochs", 1)
+    if isinstance(epochs, int) and epochs < 1:
+        errors.append(f"train.epochs={epochs} must be >= 1")
+    lr = tcfg.get("lr", 0.001)
+    if isinstance(lr, (int, float)) and lr <= 0:
+        errors.append(f"train.lr={lr} must be positive")
+    loss_type = tcfg.get("loss_type", "dicece")
+    if loss_type not in {"dicece", "ce"}:
+        errors.append(f"train.loss_type='{loss_type}' invalid. Use 'dicece' or 'ce'.")
+    return errors
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def validate_config(cfg: Dict[str, Any], strict: bool = True) -> List[str]:
+    """Validate a resolved experiment config.
+
+    Args:
+        cfg: Fully-merged config dict.
+        strict: If True (default), raise ConfigError on first error batch.
+                If False, return list of error strings.
+
+    Returns:
+        List of error strings (empty if valid). Only returned when strict=False.
+
+    Raises:
+        ConfigError: When strict=True and errors are found.
+    """
+    errors: List[str] = []
+    errors.extend(_validate_model(cfg))
+    errors.extend(_validate_data(cfg))
+    errors.extend(_validate_method(cfg))
+    errors.extend(_validate_train(cfg))
+
+    if errors and strict:
+        msg = "Config validation failed:\n" + "\n".join(f"  - {e}" for e in errors)
+        raise ConfigError(msg)
+
+    return errors

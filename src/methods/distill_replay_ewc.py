@@ -1,13 +1,22 @@
+"""Combined method: distillation + replay + Fisher-based EWC regularization.
+
+Inherits replay buffer from ReplayMethod and adds:
+- Teacher-based knowledge distillation (via Teacher abstraction)
+- Elastic Weight Consolidation with diagonal Fisher estimation
+"""
 from __future__ import annotations
 
 import copy
 import logging
 from pathlib import Path
-from typing import Dict
+from typing import Any, Dict
+
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 
 from .replay import ReplayMethod
+from .teacher import Teacher
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +35,16 @@ class DistillReplayEWCMethod(ReplayMethod):
         self.ewc_weight = float(ewc_cfg.get("weight", 0.1))
         self.fisher_samples = int(ewc_cfg.get("fisher_samples", 64))
 
-        self.teacher_model: torch.nn.Module | None = None
+        teacher_cfg = kd_cfg.get("teacher", {})
+        self.teacher = Teacher(teacher_cfg=teacher_cfg)
+
         self.prev_params: Dict[str, torch.Tensor] = {}
         self.fisher: Dict[str, torch.Tensor] = {}
+
+    @property
+    def teacher_model(self) -> nn.Module | None:
+        """Backward-compatible access."""
+        return self.teacher.model
 
     def _validate_config(self) -> None:
         super()._validate_config()
@@ -54,8 +70,18 @@ class DistillReplayEWCMethod(ReplayMethod):
         if "fisher_samples" not in ewc_cfg:
             logger.warning("DistillReplayEWCMethod: method.ewc.fisher_samples not set; defaulting to 64")
 
-    def _estimate_fisher(self, model: torch.nn.Module, dataloader, device: str, n_samples: int = 64) -> Dict[str, torch.Tensor]:
-        fisher = {n: torch.zeros_like(p) for n, p in model.named_parameters() if p.requires_grad}
+    def _estimate_fisher(
+        self,
+        model: nn.Module,
+        dataloader,
+        device: str,
+        n_samples: int = 64,
+    ) -> Dict[str, torch.Tensor]:
+        fisher = {
+            n: torch.zeros_like(p)
+            for n, p in model.named_parameters()
+            if p.requires_grad
+        }
         model.eval()
         count = 0
         for batch in dataloader:
@@ -76,26 +102,31 @@ class DistillReplayEWCMethod(ReplayMethod):
         model.train()
         return fisher
 
-    def _ewc_penalty(self, model: torch.nn.Module, device) -> torch.Tensor:
+    def _ewc_penalty(self, model: nn.Module, device) -> torch.Tensor:
         if not self.prev_params or not self.fisher:
             return torch.tensor(0.0, device=device)
         penalty = torch.tensor(0.0, device=device)
         for n, p in model.named_parameters():
             if n in self.prev_params and n in self.fisher:
-                penalty += (self.fisher[n].to(device) * (p - self.prev_params[n].to(device)).pow(2)).sum()
+                penalty += (
+                    self.fisher[n].to(device)
+                    * (p - self.prev_params[n].to(device)).pow(2)
+                ).sum()
         return penalty
 
-    def training_loss(self, model: torch.nn.Module, batch: Dict, device: str) -> torch.Tensor:
+    def training_loss(
+        self, model: nn.Module, batch: Dict, device: str
+    ) -> torch.Tensor:
         # base CE + replay from ReplayMethod
         base_loss = super().training_loss(model, batch, device)
 
-        # KD loss (only when teacher exists, i.e. after first task)
+        # KD loss (only when teacher exists)
         kd = torch.tensor(0.0, device=base_loss.device)
-        if self.teacher_model is not None:
+        if self.teacher.has_model:
             x = batch["image"].to(base_loss.device)
             student_logits = model(x)
-            with torch.no_grad():
-                teacher_logits = self.teacher_model(x)
+            self.teacher.to(base_loss.device)
+            teacher_logits = self.teacher(x)
             T = self.temperature
             kd = F.kl_div(
                 F.log_softmax(student_logits / T, dim=1),
@@ -106,38 +137,37 @@ class DistillReplayEWCMethod(ReplayMethod):
         ewc = self._ewc_penalty(model, base_loss.device)
         return base_loss + self.kd_weight * kd + self.ewc_weight * ewc
 
-    def post_task_update(self, model: torch.nn.Module, **kwargs) -> None:
+    def post_task_update(self, model: nn.Module, **kwargs) -> None:
         # Teacher snapshot
-        self.teacher_model = copy.deepcopy(model).eval()
-        for p in self.teacher_model.parameters():
-            p.requires_grad = False
+        self.teacher.snapshot(model)
         # Fisher estimation
-        train_loader = kwargs.get('train_loader')
+        train_loader = kwargs.get("train_loader")
         device = next(model.parameters()).device
         if train_loader is not None:
-            self.fisher = self._estimate_fisher(model, train_loader, str(device), self.fisher_samples)
+            self.fisher = self._estimate_fisher(
+                model, train_loader, str(device), self.fisher_samples
+            )
         # Param snapshot
-        self.prev_params = {n: p.detach().cpu().clone() for n, p in model.named_parameters()}
+        self.prev_params = {
+            n: p.detach().cpu().clone() for n, p in model.named_parameters()
+        }
 
-    def save_state(self, path: Path, model_template: torch.nn.Module | None = None) -> None:
+    def save_state(self, path: Path, model_template: nn.Module | None = None) -> None:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        state: Dict = {
+        state: Dict[str, Any] = {
             "fisher": self.fisher,
             "prev_params": self.prev_params,
-            "memory": [{"image": m["image"], "label": m["label"]} for m in self.memory],
+            "memory": [
+                {"image": m["image"], "label": m["label"]} for m in self.memory
+            ],
         }
-        if self.teacher_model is not None:
-            state["teacher_state_dict"] = self.teacher_model.state_dict()
+        state.update(self.teacher.state_dict())
         torch.save(state, path)
 
-    def load_state(self, path: Path, model_template: torch.nn.Module | None = None) -> None:
+    def load_state(self, path: Path, model_template: nn.Module | None = None) -> None:
         state = torch.load(Path(path), map_location="cpu", weights_only=False)
         self.fisher = state.get("fisher", {})
         self.prev_params = state.get("prev_params", {})
         self.memory = state.get("memory", [])
-        if "teacher_state_dict" in state and model_template is not None:
-            self.teacher_model = copy.deepcopy(model_template).eval()
-            self.teacher_model.load_state_dict(state["teacher_state_dict"])
-            for p in self.teacher_model.parameters():
-                p.requires_grad = False
+        self.teacher.load_state_dict(state, model_template=model_template)
