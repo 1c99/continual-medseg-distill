@@ -72,6 +72,30 @@ class ACDCDataset(Dataset):
 
         return pairs
 
+    @classmethod
+    def validate_subject(cls, root: str, sid: str) -> dict:
+        """Check that a subject has the expected image+label pair."""
+        result = {"id": sid, "valid": True, "errors": []}
+        parts = sid.rsplit("_", 1)
+        if len(parts) != 2:
+            result["valid"] = False
+            result["errors"].append(
+                f"Invalid ACDC sid format '{sid}', expected 'patientXXX_frameYY'"
+            )
+            return result
+        patient, frame = parts
+        root_path = Path(root)
+        base = root_path / patient
+        img = base / f"{frame}.nii.gz"
+        gt = base / f"{frame}_gt.nii.gz"
+        if not img.exists():
+            result["valid"] = False
+            result["errors"].append(f"Missing image: {img}")
+        if not gt.exists():
+            result["valid"] = False
+            result["errors"].append(f"Missing label: {gt}")
+        return result
+
     def __len__(self) -> int:
         return len(self.ids)
 

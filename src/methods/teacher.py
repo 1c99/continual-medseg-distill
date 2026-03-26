@@ -6,10 +6,16 @@ Supports two modes:
 
 Feature extraction is optionally available via hook-based intermediate
 representation capture for feature-level distillation.
+
+Standardized interface:
+- ``forward_logits(x)`` — returns output logits
+- ``forward_features(x)`` — returns intermediate feature dict (requires use_features)
+- ``metadata`` — teacher provenance: model_id, ckpt_hash, mode, frozen status
 """
 from __future__ import annotations
 
 import copy
+import hashlib
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -26,6 +32,7 @@ class Teacher:
     Config keys (under ``method.kd.teacher``):
         type: snapshot | checkpoint  (default: snapshot)
         ckpt_path: path to .pt file (required when type=checkpoint)
+        model_id: str  (optional, for provenance tracking)
         use_features: bool  (default: false)
         feature_layers: list of layer name prefixes to capture
     """
@@ -43,6 +50,9 @@ class Teacher:
         self._features: Dict[str, torch.Tensor] = {}
         self._use_features = bool(self._cfg.get("use_features", False))
         self._feature_layers: List[str] = list(self._cfg.get("feature_layers", []))
+        self._ckpt_hash: str | None = None
+        self._source_mode: str = "none"  # none | snapshot | checkpoint
+        self._model_id: str = self._cfg.get("model_id", "")
 
         teacher_type = self._cfg.get("type", "snapshot")
 
@@ -69,15 +79,39 @@ class Teacher:
         """Captured intermediate features from last forward pass."""
         return self._features
 
+    @property
+    def metadata(self) -> Dict[str, Any]:
+        """Teacher provenance metadata for reproducibility tracking."""
+        return {
+            "model_id": self._model_id or type(self._model).__name__ if self._model else "",
+            "ckpt_hash": self._ckpt_hash,
+            "source_mode": self._source_mode,
+            "frozen": self.has_model and all(
+                not p.requires_grad for p in self._model.parameters()
+            ) if self.has_model else False,
+            "use_features": self._use_features,
+            "feature_layers": self._feature_layers,
+        }
+
     def snapshot(self, model: nn.Module) -> None:
         """Deepcopy *model* as the frozen teacher."""
         self._remove_hooks()
         self._model = copy.deepcopy(model).eval()
         for p in self._model.parameters():
             p.requires_grad = False
+        self._source_mode = "snapshot"
+        self._ckpt_hash = None
         if self._use_features:
             self._register_hooks()
         logger.debug("Teacher: snapshot created")
+
+    @staticmethod
+    def _compute_ckpt_hash(path: Path, nbytes: int = 4096) -> str:
+        """SHA256 of first *nbytes* of checkpoint file for lineage tracking."""
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            h.update(f.read(nbytes))
+        return h.hexdigest()[:16]
 
     def _load_from_checkpoint(
         self, ckpt_path: str, model_template: nn.Module | None
@@ -92,6 +126,7 @@ class Teacher:
             raise ValueError(
                 "model_template is required to load teacher from checkpoint"
             )
+        self._ckpt_hash = self._compute_ckpt_hash(path)
         state = torch.load(path, map_location="cpu", weights_only=False)
         sd = state.get("model_state_dict", state)
         self._model = copy.deepcopy(model_template)
@@ -99,9 +134,10 @@ class Teacher:
         self._model.eval()
         for p in self._model.parameters():
             p.requires_grad = False
+        self._source_mode = "checkpoint"
         if self._use_features:
             self._register_hooks()
-        logger.info(f"Teacher: loaded from checkpoint {path}")
+        logger.info(f"Teacher: loaded from checkpoint {path} (hash={self._ckpt_hash})")
 
     # ---- feature hooks ----
 
@@ -153,6 +189,23 @@ class Teacher:
             raise RuntimeError("Teacher model is not initialised; call snapshot() first")
         return self._model(x)
 
+    def forward_logits(self, x: torch.Tensor) -> torch.Tensor:
+        """Standardized interface: return output logits."""
+        return self.forward(x)
+
+    def forward_features(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """Standardized interface: run forward pass and return captured features.
+
+        Requires ``use_features=True`` and ``feature_layers`` to be set.
+        Returns dict mapping layer names to their output tensors.
+        """
+        if not self._use_features:
+            raise RuntimeError(
+                "forward_features() requires use_features=True in teacher config"
+            )
+        _ = self.forward(x)
+        return dict(self._features)
+
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
         return self.forward(x)
 
@@ -162,6 +215,7 @@ class Teacher:
         state: Dict[str, Any] = {}
         if self._model is not None:
             state["teacher_state_dict"] = self._model.state_dict()
+        state["teacher_metadata"] = self.metadata
         return state
 
     def load_state_dict(

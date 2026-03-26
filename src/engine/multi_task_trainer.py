@@ -78,6 +78,7 @@ def _save_progress(
     task_id: str,
     task_order: List[str],
     task_eval_history: Dict[str, Dict[str, Dict[str, float]]],
+    resume_count: int = 0,
 ) -> None:
     """Persist progress to allow resume after interruption."""
     progress = {
@@ -85,6 +86,7 @@ def _save_progress(
         "last_completed_task_id": task_id,
         "task_order_so_far": task_order,
         "task_eval_history": task_eval_history,
+        "resume_count": resume_count,
     }
     path = output_dir / _PROGRESS_FILE
     path.write_text(json.dumps(progress, indent=2, default=str), encoding="utf-8")
@@ -146,10 +148,42 @@ def compute_forgetting(
     valid = [v for v in forgetting_per_task.values() if not math.isnan(v)]
     mean_forgetting = sum(valid) / len(valid) if valid else math.nan
 
+    # BWT (Backward Transfer) = mean of (R_{T,i} - R_{i,i}) for i < T
+    # Negative BWT means forgetting; positive means backward improvement
+    bwt_per_task: Dict[str, float] = {}
+    for i, task_id in enumerate(task_order[:-1]):
+        perf_after_own = matrix[task_id].get(task_id)
+        perf_after_last = matrix[last_task].get(task_id)
+        if perf_after_own is not None and perf_after_last is not None:
+            bwt_per_task[task_id] = perf_after_last - perf_after_own
+        else:
+            bwt_per_task[task_id] = math.nan
+
+    valid_bwt = [v for v in bwt_per_task.values() if not math.isnan(v)]
+    mean_bwt = sum(valid_bwt) / len(valid_bwt) if valid_bwt else math.nan
+
+    # FWT (Forward Transfer) = mean of (R_{i-1,i} - random_baseline) for i > 0
+    # We approximate random baseline as 0 (no prior knowledge)
+    fwt_per_task: Dict[str, float] = {}
+    for i, task_id in enumerate(task_order[1:], start=1):
+        prev_task = task_order[i - 1]
+        perf_before_training = matrix.get(prev_task, {}).get(task_id)
+        if perf_before_training is not None:
+            fwt_per_task[task_id] = perf_before_training
+        else:
+            fwt_per_task[task_id] = math.nan
+
+    valid_fwt = [v for v in fwt_per_task.values() if not math.isnan(v)]
+    mean_fwt = sum(valid_fwt) / len(valid_fwt) if valid_fwt else math.nan
+
     return {
         "matrix": matrix,
         "per_task": forgetting_per_task,
         "mean": mean_forgetting,
+        "bwt_per_task": bwt_per_task,
+        "mean_bwt": mean_bwt,
+        "fwt_per_task": fwt_per_task,
+        "mean_fwt": mean_fwt,
         "metric_key": metric_key,
     }
 
@@ -209,8 +243,12 @@ def _write_task_results(
         "task_order": task_order,
         "num_tasks": len(task_order),
         "mean_forgetting": forgetting["mean"],
+        "mean_bwt": forgetting.get("mean_bwt", math.nan),
+        "mean_fwt": forgetting.get("mean_fwt", math.nan),
         "forgetting_metric": forgetting["metric_key"],
         "per_task_forgetting": forgetting["per_task"],
+        "bwt_per_task": forgetting.get("bwt_per_task", {}),
+        "fwt_per_task": forgetting.get("fwt_per_task", {}),
     }
     (output_dir / "multi_task_summary.json").write_text(
         json.dumps(summary, indent=2, default=str), encoding="utf-8"
@@ -255,6 +293,7 @@ def run_task_sequence(
     val_loaders: Dict[str, Any] = {}
     task_eval_history: Dict[str, Dict[str, Dict[str, float]]] = {}
     start_idx = 0
+    resume_count = 0
 
     # ---- resume logic ----
     if resume:
@@ -263,6 +302,7 @@ def run_task_sequence(
             completed_idx = progress["completed_task_idx"]
             start_idx = completed_idx + 1
             task_order = progress["task_order_so_far"]
+            resume_count = progress.get("resume_count", 0) + 1
             task_eval_history = progress["task_eval_history"]
 
             if start_idx >= len(task_configs):
@@ -362,7 +402,8 @@ def run_task_sequence(
 
         # Save progress for resume
         _save_progress(
-            output_dir, task_idx, task_id, task_order, task_eval_history
+            output_dir, task_idx, task_id, task_order, task_eval_history,
+            resume_count=resume_count,
         )
         logger.info(f"  checkpoint + progress saved: {task_output / 'checkpoints'}")
 

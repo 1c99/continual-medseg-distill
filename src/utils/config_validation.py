@@ -2,12 +2,19 @@
 
 Call ``validate_config(cfg)`` before training to fail fast with
 actionable error messages for missing or incompatible settings.
+
+Also provides ``compute_config_hash()`` for reproducibility tracking
+and ``save_resolved_config()`` for run artifact persistence.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, List
+
+import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -192,5 +199,59 @@ def validate_config(cfg: Dict[str, Any], strict: bool = True) -> List[str]:
     if errors and strict:
         msg = "Config validation failed:\n" + "\n".join(f"  - {e}" for e in errors)
         raise ConfigError(msg)
+
+    return errors
+
+
+# ---------------------------------------------------------------------------
+# Config hashing and persistence
+# ---------------------------------------------------------------------------
+
+def compute_config_hash(cfg: Dict[str, Any]) -> str:
+    """Deterministic SHA256 hash of a config dict for reproducibility tracking."""
+    serialized = json.dumps(cfg, sort_keys=True, default=str)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16]
+
+
+def save_resolved_config(cfg: Dict[str, Any], output_dir: str | Path) -> Path:
+    """Write resolved config YAML and its hash to *output_dir*.
+
+    Creates:
+        - ``resolved_config.yaml``
+        - ``config_hash.txt``
+
+    Returns path to the YAML file.
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    yaml_path = output_dir / "resolved_config.yaml"
+    with yaml_path.open("w", encoding="utf-8") as f:
+        yaml.dump(cfg, f, default_flow_style=False, sort_keys=True)
+
+    hash_val = compute_config_hash(cfg)
+    (output_dir / "config_hash.txt").write_text(hash_val + "\n", encoding="utf-8")
+
+    return yaml_path
+
+
+def validate_paths(cfg: Dict[str, Any]) -> List[str]:
+    """Check that configured file/directory paths actually exist on disk."""
+    errors: List[str] = []
+    data_cfg = cfg.get("data", {})
+    source = data_cfg.get("source", "synthetic")
+    if source == "synthetic":
+        return errors
+
+    source_cfg = data_cfg.get(source, {})
+    root = source_cfg.get("root")
+    if root and not Path(root).exists():
+        errors.append(f"data.{source}.root path does not exist: {root}")
+
+    # Teacher checkpoint
+    teacher_cfg = cfg.get("method", {}).get("kd", {}).get("teacher", {})
+    ckpt = teacher_cfg.get("ckpt_path")
+    if ckpt and not Path(ckpt).exists():
+        errors.append(f"method.kd.teacher.ckpt_path not found: {ckpt}")
 
     return errors

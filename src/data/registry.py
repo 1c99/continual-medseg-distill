@@ -191,8 +191,13 @@ def create_loaders(cfg: Dict) -> Tuple[DataLoader, DataLoader]:
             "Use data.source=synthetic, totalseg, brats21, or acdc."
         )
 
-    train_loader = DataLoader(train_ds, batch_size=train_bs, shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=val_bs, shuffle=False)
+    from src.utils.reproducibility import worker_init_fn
+    train_loader = DataLoader(
+        train_ds, batch_size=train_bs, shuffle=True, worker_init_fn=worker_init_fn,
+    )
+    val_loader = DataLoader(
+        val_ds, batch_size=val_bs, shuffle=False, worker_init_fn=worker_init_fn,
+    )
     return train_loader, val_loader
 
 

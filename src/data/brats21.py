@@ -55,6 +55,31 @@ class Brats21Dataset(Dataset):
         self.target_shape = target_shape
         self.normalize_per_channel = normalize_per_channel
 
+    @classmethod
+    def validate_subject(
+        cls, root: str, sid: str, layout: str = "per_case"
+    ) -> dict:
+        """Check that a subject has all expected files and return diagnostics."""
+        root_path = Path(root)
+        result = {"id": sid, "valid": True, "errors": []}
+        if layout == "flat":
+            files = {
+                "t1": root_path / "imagesTr" / f"{sid}_t1_0000.nii.gz",
+                "t1ce": root_path / "imagesTr" / f"{sid}_t1ce_0000.nii.gz",
+                "flair": root_path / "etc" / "images_flair" / f"{sid}_0000.nii.gz",
+                "t2": root_path / "etc" / "images_t2" / f"{sid}_0000.nii.gz",
+                "seg": root_path / "etc" / "labels_4cls" / f"{sid}_seg.nii.gz",
+            }
+        else:
+            case_dir = root_path / sid
+            files = {m: case_dir / f"{sid}_{m}.nii.gz" for m in cls.MODALITIES}
+            files["seg"] = case_dir / f"{sid}_seg.nii.gz"
+        for key, path in files.items():
+            if not path.exists():
+                result["valid"] = False
+                result["errors"].append(f"Missing {key}: {path}")
+        return result
+
     def __len__(self) -> int:
         return len(self.ids)
 

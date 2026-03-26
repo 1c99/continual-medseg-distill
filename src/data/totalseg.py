@@ -41,6 +41,26 @@ class TotalSegmentatorDataset(Dataset):
         self.organ = organ
         self.target_shape = target_shape
 
+    @classmethod
+    def validate_subject(cls, root: str, sid: str, organ: str = "liver") -> dict:
+        """Check that a subject directory has the expected files and return diagnostics."""
+        root_path = Path(root)
+        sp = root_path / sid
+        result = {"id": sid, "valid": True, "errors": []}
+        if not sp.exists():
+            result["valid"] = False
+            result["errors"].append(f"Subject directory not found: {sp}")
+            return result
+        ct_path = sp / "ct.nii.gz"
+        if not ct_path.exists():
+            result["valid"] = False
+            result["errors"].append(f"Missing: {ct_path}")
+        seg_path = sp / "segmentations" / f"{organ}.nii.gz"
+        if not seg_path.exists():
+            result["valid"] = False
+            result["errors"].append(f"Missing: {seg_path}")
+        return result
+
     def __len__(self):
         return len(self.ids)
 

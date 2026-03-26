@@ -23,6 +23,48 @@ def _save_checkpoint(path: Path, model: torch.nn.Module, optimizer: torch.optim.
     )
 
 
+class EarlyStopper:
+    """Tracks a monitored metric and signals when to stop.
+
+    Config keys (under ``train.early_stopping``):
+        patience: int  (epochs without improvement, default: 0 = disabled)
+        metric: str    (eval metric key, default: dice_mean)
+        mode: str      (max | min, default: max)
+    """
+
+    def __init__(self, patience: int = 0, metric: str = "dice_mean", mode: str = "max"):
+        self.patience = patience
+        self.metric = metric
+        self.mode = mode
+        self._best: float | None = None
+        self._wait: int = 0
+        self.enabled = patience > 0
+
+    def step(self, eval_metrics: dict) -> bool:
+        """Return True if training should stop."""
+        if not self.enabled:
+            return False
+        current = eval_metrics.get(self.metric)
+        if current is None:
+            return False
+
+        improved = False
+        if self._best is None:
+            improved = True
+        elif self.mode == "min":
+            improved = current < self._best
+        else:
+            improved = current > self._best
+
+        if improved:
+            self._best = current
+            self._wait = 0
+        else:
+            self._wait += 1
+
+        return self._wait >= self.patience
+
+
 def train(
     model: torch.nn.Module,
     method,
@@ -46,6 +88,14 @@ def train(
 
     best_metric_key = out_cfg.get("best_metric", "voxel_acc")
     best_mode = out_cfg.get("best_mode", "max")
+
+    # Early stopping
+    es_cfg = tcfg.get("early_stopping", {})
+    early_stopper = EarlyStopper(
+        patience=int(es_cfg.get("patience", 0)),
+        metric=es_cfg.get("metric", "dice_mean"),
+        mode=es_cfg.get("mode", "max"),
+    )
 
     model.to(device)
     model.train()
@@ -123,8 +173,16 @@ def train(
             logger.info(f"saved best checkpoint ({best_metric_key}={best_metric:.4f})")
 
         logger.info(f"epoch={epoch+1} done train_loss={train_loss:.4f}")
+
         if dry_run:
             logger.info("dry-run enabled; stopping after one epoch")
+            break
+
+        if early_stopper.step(eval_metrics):
+            logger.info(
+                f"Early stopping triggered after {epoch+1} epochs "
+                f"(patience={early_stopper.patience}, metric={early_stopper.metric})"
+            )
             break
 
     method.post_task_update(model, train_loader=train_loader)

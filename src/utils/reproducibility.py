@@ -20,6 +20,28 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+def set_deterministic_mode(seed: int) -> None:
+    """Set seeds and enable deterministic backends where possible."""
+    set_seed(seed)
+    torch.use_deterministic_algorithms(False)  # True breaks some MONAI ops
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+def worker_init_fn(worker_id: int) -> None:
+    """DataLoader worker_init_fn for reproducible multi-worker loading.
+
+    Each worker gets ``base_seed + worker_id`` so workers produce
+    different-but-deterministic augmentation sequences.
+    """
+    worker_info = torch.utils.data.get_worker_info()
+    base_seed = worker_info.seed if worker_info else 0
+    seed = (base_seed + worker_id) % (2**32)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+
 def get_git_info() -> Dict[str, Any]:
     """Get current git commit hash and dirty status."""
     try:
