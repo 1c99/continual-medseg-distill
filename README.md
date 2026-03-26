@@ -102,6 +102,49 @@ or use one of:
 - `configs/methods/distill.yaml`
 - `configs/methods/distill_replay_ewc.yaml`
 
+## KD mode selection (distill method)
+
+The distillation method supports multiple knowledge distillation modes via config:
+
+```yaml
+method:
+  name: distill
+  kd:
+    mode: logit         # logit | feature | weighted | boundary
+    weight: 0.7
+    temperature: 2.0
+    teacher:
+      type: snapshot    # snapshot (auto from previous task) | checkpoint (load from file)
+```
+
+| Mode | Description |
+|------|-------------|
+| `logit` | KL-divergence on softened output logits (default) |
+| `feature` | MSE on intermediate representations + logit KD |
+| `weighted` | Uncertainty-weighted logit KD (down-weights uncertain voxels) |
+| `boundary` | Boundary-aware logit KD (up-weights voxels near class boundaries) |
+
+Feature mode requires `teacher.feature_layers` to specify which model layers to hook.
+
+## Config validation
+
+Validate a config before training:
+
+```python
+from src.utils.config_validation import validate_config
+errors = validate_config(cfg, strict=False)  # returns list of errors
+validate_config(cfg, strict=True)            # raises ConfigError
+```
+
+## Multi-task resume
+
+The multi-task trainer saves progress after each task. To resume an interrupted run:
+
+```python
+from src.engine.multi_task_trainer import run_task_sequence
+result = run_task_sequence(model, method, tasks, cfg, logger, eval_fn, output_dir, resume=True)
+```
+
 ## Dataset adapter examples (local-path only)
 
 BraTS21 example:
@@ -188,8 +231,7 @@ Ranking logic:
 
 ## Next implementation targets
 
-1. Real dataset adapters + MONAI transforms in `src/data/registry.py`
-2. Replay buffer strategy and sampler in `src/methods/replay.py`
-3. Teacher snapshot + KD losses in `src/methods/distill.py`
-4. Fisher estimation + EWC penalty in `src/methods/distill_replay_ewc.py`
-5. Metric/reporting polish (confidence intervals, cohort-level summaries) + checkpointing strategy tuning
+1. First real-data training run (TotalSeg liver, pending GPU driver update)
+2. Multi-task ablation runner across all 4 methods × task sequences
+3. Reservoir sampling for replay buffer (upgrade from FIFO)
+4. Metric polish (confidence intervals, cohort-level summaries)

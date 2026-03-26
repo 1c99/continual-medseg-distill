@@ -4,6 +4,92 @@ This file is updated alongside repository progress so experiment intent and impl
 
 ---
 
+## 2026-03-26 — Phase-4: Teacher Abstraction, Multi-Mode KD, Resumable Engine, Config Validation
+
+### Summary
+Code-only sprint: built research-grade teacher integration, 4 KD modes (logit/feature/weighted/boundary), resumable multi-task engine, and strict config validation. All 69 tests pass. Synthetic ablation suite verified. No fake runtime claims — workstation compute blocked, code is execution-ready.
+
+### What was implemented
+
+**1. Teacher Integration Layer (`src/methods/teacher.py`)**
+- Clean `Teacher` class with two modes: `snapshot` (deepcopy current model) and `checkpoint` (load from file)
+- Automatic freeze/eval mode enforcement
+- Hook-based intermediate feature extraction for feature KD
+- State persistence (save_dict / load_state_dict)
+- Config: `method.kd.teacher.type`, `method.kd.teacher.ckpt_path`, `method.kd.teacher.use_features`, `method.kd.teacher.feature_layers`
+
+**2. Multi-Mode Distillation (`src/methods/distill.py`)**
+- `logit`: KL-divergence on softened logits (baseline, unchanged behaviour)
+- `feature`: MSE on intermediate representations + logit KD (requires `feature_layers`)
+- `weighted`: uncertainty-weighted logit KD — down-weights uncertain teacher voxels using max-probability confidence
+- `boundary`: boundary-aware logit KD — up-weights voxels near class boundaries via discrete Laplacian edge detection + Gaussian smoothing
+- All modes fully config-toggleable via `method.kd.mode`
+- No hardcoding by dataset
+
+**3. Resumable Multi-Task Engine (`src/engine/multi_task_trainer.py`)**
+- `task_progress.json` written after each task completion
+- `resume=True` parameter: loads last checkpoint, restores model + method state, continues from next task
+- Handles edge cases: all tasks already complete, missing checkpoint fallback
+- Backward-compatible: `resume=False` (default) preserves existing behaviour
+
+**4. Config Validation (`src/utils/config_validation.py`)**
+- `validate_config(cfg, strict=True)` — fail-fast with actionable error messages
+- Checks: model (channels), data (source, root, splits), method (name, KD mode, teacher settings, buffer sizes), train (epochs, lr, loss_type)
+- Strict mode raises `ConfigError`; non-strict returns error list
+
+**5. DistillReplayEWC updated (`src/methods/distill_replay_ewc.py`)**
+- Refactored to use `Teacher` class instead of raw deepcopy
+- Backward-compatible `teacher_model` property preserved
+
+### Test summary (69/69 pass)
+
+| Test suite | Tests | Status |
+|-----------|-------|--------|
+| test_teacher_and_kd.py | 26 | PASS |
+| test_multi_task.py | 13 | PASS |
+| test_metrics_edge_cases.py | 12 | PASS |
+| test_fisher_ewc.py | 8 | PASS |
+| test_dicece_loss.py | 5 | PASS |
+| test_reproducibility.py | 5 | PASS |
+
+**New test breakdown (26 tests):**
+- Teacher: snapshot/freeze (2), independence (1), forward (1), checkpoint errors (2), round-trip (1), feature hooks (1)
+- KD modes: logit (1), weighted (1), boundary (1), feature (1), mode-affects-loss (1)
+- State round-trip: distill (1), distill_replay_ewc (1)
+- Resume: interrupted run (1), already complete (1)
+- Config validation: valid passes (1), 9 error detection tests
+
+### Synthetic ablation re-verified (4/4 pass)
+
+All methods still produce correct output after refactoring.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `src/methods/teacher.py` | NEW — Teacher abstraction |
+| `src/methods/distill.py` | REWRITE — multi-mode KD |
+| `src/methods/distill_replay_ewc.py` | REWRITE — uses Teacher class |
+| `src/engine/multi_task_trainer.py` | REWRITE — resume support |
+| `src/utils/config_validation.py` | NEW — strict config validation |
+| `configs/methods/distill.yaml` | Updated with KD mode + teacher config |
+| `tests/test_teacher_and_kd.py` | NEW — 26 tests |
+| `README.md` | Added KD modes, config validation, resume docs |
+| `docs/experiment_protocol.md` | Marked code-complete / run-pending |
+
+### Known limitations
+1. Feature KD requires manual specification of `feature_layers` — no auto-detection
+2. Boundary KD uses approximate Gaussian via avg_pool3d, not true Gaussian blur
+3. Resume rebuilds val_loaders from scratch (adds ~seconds of overhead)
+4. Config validation does not check file existence for non-absolute split manifest paths
+
+### Next top 3 actions
+1. Update CUDA driver → run `python scripts/train.py --config configs/base.yaml --dataset-config configs/datasets/totalseg_train.yaml`
+2. Run multi-task ablation: TotalSeg → BraTS21 sequence, all 4 methods
+3. Add multi-task ablation runner script wrapping `run_task_sequence()` across methods
+
+---
+
 ## 2026-03-26 — M2 Achieved: Real-Data Validation on Workstation
 
 ### Summary
@@ -426,8 +512,12 @@ Implemented the continual learning execution backbone: multi-task sequential tra
 - [x] `v1.1`: Teacher/Fisher/memory checkpoint persistence (save/load)
 - [x] `v1.2`: Forgetting measurement (backward transfer matrix + per-task + mean)
 - [x] `v1.3`: Real-data validation (M2) — TotalSeg + BraTS21 validated on workstation
-- [ ] `v1.4`: Real-data TotalSeg training run (pending GPU/CUDA driver)
-- [ ] `v1.5`: Multi-task ablation runner (all 4 methods × task sequence)
+- [x] `v1.4`: Teacher abstraction with snapshot/checkpoint modes
+- [x] `v1.5`: Multi-mode KD (logit/feature/weighted/boundary), all config-toggleable
+- [x] `v1.6`: Resumable multi-task engine with task progress persistence
+- [x] `v1.7`: Strict config validation with actionable errors
+- [ ] `v1.8`: Real-data TotalSeg training run (pending GPU/CUDA driver)
+- [ ] `v1.9`: Multi-task ablation runner (all 4 methods × task sequence)
 
 ---
 

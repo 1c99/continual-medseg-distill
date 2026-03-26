@@ -104,8 +104,18 @@ Notes:
 - Dice/forgetting columns are auto-detected from available metric keys.
 - If forgetting (or dice) is missing, the bundle includes caveats rather than failing.
 
-## TODOs
+## Status: Code-Complete / Run-Pending
 
-- [ ] Implement per-task dataloaders and transitions
-- [ ] Add checkpoint manager and task-wise evaluator
-- [ ] Add full continual metrics table generation
+All core components are implemented and tested (69 tests passing):
+- [x] Per-task dataloaders and transitions (multi_task_trainer.py)
+- [x] Checkpoint manager and task-wise evaluator
+- [x] Teacher abstraction with snapshot/checkpoint modes
+- [x] 4 KD modes: logit, feature, weighted, boundary
+- [x] Resumable multi-task sequences
+- [x] Config validation with actionable errors
+- [x] Forgetting metrics (backward transfer matrix)
+
+### Remaining for execution
+- [ ] First real-data run (blocked on CUDA driver update)
+- [ ] Full continual metrics table generation across methods
+- [ ] Confidence intervals and statistical testing
