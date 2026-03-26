@@ -1,0 +1,22 @@
+# Synthetic A→B test (mirrors organ→muscle structure with synthetic data)
+# Used for pipeline validation only — no real data needed
+task_sequence:
+  name: synthetic_AB_test
+  setting: task_incremental
+
+  tasks:
+    - id: taskA_organs
+      description: "Simulated organ task (synthetic, 6 classes)"
+      model:
+        out_channels: 6
+      data:
+        synthetic:
+          num_classes: 6
+
+    - id: taskB_muscles
+      description: "Simulated muscle task (synthetic, 6 classes)"
+      model:
+        out_channels: 6
+      data:
+        synthetic:
+          num_classes: 6

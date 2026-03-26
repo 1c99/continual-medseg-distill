@@ -1,121 +1,188 @@
-# Experiment Protocol (Scaffold)
+# Experiment Protocol: Continual Distillation for 3D Medical Segmentation
 
-## Objective
-Benchmark continual 3D medical segmentation across CT→MRI task sequence with:
-1. Fine-tune baseline
-2. Replay
-3. Distillation
-4. Distillation + Replay + EWC
+## Overview
 
-## Suggested protocol
+This document defines the experimental design for evaluating knowledge distillation
+in a continual learning setting on 3D CT segmentation using TotalSegmentator.
 
-1. Define task order in `configs/tasks/ct_mri_sequence.yaml`.
-2. Keep architecture fixed across methods.
-3. For each method:
-   - train sequentially task-by-task
-   - evaluate on all seen tasks after each stage
-4. Report:
-   - average Dice over seen tasks
-   - forgetting (drop from best historical performance)
-   - forward/backward transfer (optional)
+**Core hypothesis:** A student model trained with knowledge distillation from a
+pretrained teacher (MedSAM3) suffers less catastrophic forgetting when learning
+new tasks compared to a student without distillation.
 
-## Reproducibility checklist
+---
 
-- Set random seeds (`experiment.seed`)
-- Log config snapshot per run
-- Save model checkpoint at each task boundary
-- Keep identical preprocessing across methods
+## Task Definitions
 
-## Ablation runner (reproducible orchestration)
+### Task A — Abdominal Organ Segmentation
 
-Use `scripts/run_ablations.py` to run multiple method configs in one shot and produce a comparable table.
+| Class | Label | TotalSeg Mask File |
+|-------|-------|--------------------|
+| 0 | Background | — |
+| 1 | Liver | `liver.nii.gz` |
+| 2 | Spleen | `spleen.nii.gz` |
+| 3 | Left Kidney | `kidney_left.nii.gz` |
+| 4 | Right Kidney | `kidney_right.nii.gz` |
+| 5 | Pancreas | `pancreas.nii.gz` |
 
-### What it does
+Config: `configs/tasks/taskA_organs.yaml`
 
-- Iterates methods: `finetune`, `replay`, `distill`, `distill_replay_ewc`
-- Creates isolated run folders under one deterministic fingerprinted parent
-- Writes `run_manifest.json` with base/dataset/method/config hashes
-- Writes per-method resolved config snapshot (`resolved_config.yaml`)
-- Captures stdout/stderr logs (`train.log`, `train.stderr.log`)
-- Collects each run's final row from `metrics.csv`
-- Exports merged `aggregate_metrics.csv` (+ `summary.json`)
+### Task B — Pelvic Muscle Segmentation
 
-### Canonical command: synthetic baseline sweep
+| Class | Label | TotalSeg Mask File |
+|-------|-------|--------------------|
+| 0 | Background | — |
+| 1 | Left Gluteus Maximus | `gluteus_maximus_left.nii.gz` |
+| 2 | Right Gluteus Maximus | `gluteus_maximus_right.nii.gz` |
+| 3 | Left Gluteus Medius | `gluteus_medius_left.nii.gz` |
+| 4 | Right Gluteus Medius | `gluteus_medius_right.nii.gz` |
+| 5 | Left Iliopsoas | `iliopsoas_left.nii.gz` |
+
+Config: `configs/tasks/taskB_muscles.yaml`
+
+**No class overlap** between A and B. Both tasks use the same subject pool
+(same CT volumes) with different segmentation targets.
+
+---
+
+## Baseline Matrix
+
+Four experimental conditions, each evaluated with the A→B continual sequence:
+
+| # | Condition | Method Config | Description |
+|---|-----------|---------------|-------------|
+| 1 | Student finetune (no KD) | `finetune.yaml` | Lower bound: naive sequential training |
+| 2 | Student + MedSAM3 KD (Task A only) | `distill_medsam3_baseline.yaml` | Distillation on first task, then finetune on B |
+| 3 | Student continual A→B (no KD) | `replay.yaml` | Replay buffer only, no teacher |
+| 4 | Student continual A→B with KD+replay+EWC | `distill_replay_ewc.yaml` | Full method: distillation + replay + EWC |
+
+### Model Architecture
+
+- **Student:** MONAI 3D U-Net (`monai_unet`)
+  - Channels: [16, 32, 64, 128], Strides: [2, 2, 2], 2 residual units
+  - Input: 1 channel (CT), Output: 6 channels (BG + 5 classes)
+- **Teacher (MedSAM3):** Loaded from checkpoint, same architecture
+  - Config: `configs/methods/distill_medsam3_baseline.yaml`
+  - Teacher is frozen during training
+
+### Training Protocol
+
+| Parameter | Value |
+|-----------|-------|
+| Epochs per task | 50 |
+| Learning rate | 0.001 |
+| Batch size | 2 |
+| Loss | Dice + CE |
+| Input shape | 128 × 128 × 128 |
+| Seed | 42 |
+| Split | `totalseg_train_clean_v1.json` (100 train / 19 val) |
+
+---
+
+## Evaluation Protocol
+
+### Per-Task Evaluation
+
+After training on each task, evaluate on **all** tasks seen so far:
+- After Task A: eval on A
+- After Task B: eval on A and B
+
+### Metrics
+
+| Metric | Description |
+|--------|-------------|
+| Dice (per-class) | Overlap coefficient per organ/muscle |
+| Dice (mean) | Mean across all foreground classes |
+| HD95 | 95th-percentile Hausdorff distance |
+| Voxel Accuracy | Fraction of correctly classified voxels |
+
+### Forgetting Metrics
+
+| Metric | Formula |
+|--------|---------|
+| Forgetting | perf(A, after A) − perf(A, after B) |
+| BWT | perf(A, after B) − perf(A, after A) |
+| FWT | perf(B, before training B) |
+
+---
+
+## Expected Artifacts
+
+Each experimental run produces:
+
+| Artifact | Path |
+|----------|------|
+| Task eval matrix | `{output}/task_eval_matrix.csv` |
+| Forgetting metrics | `{output}/forgetting.json` |
+| Summary | `{output}/multi_task_summary.json` |
+| Per-task checkpoints | `{output}/{task_id}/checkpoints/after_{task_id}.pt` |
+| Training logs | `{output}/{task_id}/metrics.csv` |
+
+---
+
+## Evidence Quality Controls
+
+1. **No overclaiming:** Synthetic runs are sanity checks only. Real-data results
+   from `totalseg_train_clean_v1.json` are the primary evidence.
+2. **Reproducibility:** All artifacts include config hash + commit hash + seed.
+3. **Clean data:** Only validated subjects (corrupt s0864 excluded).
+4. **Statistical validity:** Report mean ± std across 3 seeds for final results.
+
+---
+
+## Execution Order
+
+1. Validate multi-class data loading (synthetic A→B dry run)
+2. Run Condition 1: finetune A→B (baseline lower bound)
+3. Run Condition 3: replay A→B (replay-only baseline)
+4. Acquire/prepare MedSAM3 teacher checkpoint
+5. Run Condition 2: MedSAM3 KD on A, then finetune B
+6. Run Condition 4: KD + replay + EWC on A→B
+7. Compile forgetting comparison table
+8. Repeat with seeds {42, 123, 456} for statistical significance
+
+---
+
+## Runner Commands
+
+### Synthetic sanity check (A→B dry run)
 
 ```bash
-python scripts/run_ablations.py \
+python scripts/run_continual.py \
   --base-config configs/base.yaml \
-  --synthetic
+  --task-config configs/tasks/totalseg_AB_sequence.yaml \
+  --method-config configs/methods/finetune.yaml \
+  --dry-run
 ```
 
-### Canonical command: real-data split-manifest mode
+### Real-data continual run
 
 ```bash
-python scripts/run_ablations.py \
+python scripts/run_continual.py \
   --base-config configs/base.yaml \
-  --dataset-config configs/datasets/totalseg_example.yaml
+  --task-config configs/tasks/totalseg_AB_sequence.yaml \
+  --dataset-config configs/datasets/totalseg_train_clean.yaml \
+  --method-config configs/methods/finetune.yaml
 ```
 
-> `--dataset-config` should point to a dataset YAML that sets `data.source` and `<source>.split_manifest` (for example `totalseg`, `brats21`, or `acdc`).
-
-### Canonical command: baseline suite runner
+### Baseline suite runner
 
 ```bash
 python scripts/run_baseline_suite.py \
   --base-config configs/base.yaml \
-  --dataset-config configs/datasets/totalseg_example.yaml
+  --dataset-config configs/datasets/totalseg_train_clean.yaml
 ```
 
-Use `--dry-run` for a fast wiring check without full training.
+---
 
-### Output layout
+## Status
 
-```text
-outputs/ablations/ablation_<fingerprint>/
-  run_manifest.json
-  aggregate_metrics.csv
-  summary.json
-  finetune/
-    resolved_config.yaml
-    metrics.csv
-    checkpoints/
-    train.log
-    train.stderr.log
-  replay/
-  distill/
-  distill_replay_ewc/
-```
-
-## Packaging one run for reporting
-
-Once an ablation run is complete, build a paper-friendly bundle:
-
-```bash
-python scripts/package_results.py \
-  outputs/ablations/ablation_run_YYYYMMDD_HHMMSS
-```
-
-This creates `<run_dir>/result_bundle/` with:
-- `summary.md` (ranking by dice + forgetting when available)
-- `method_summary.csv` (all final-row metrics with rank columns)
-- `checkpoint_refs.csv` and per-checkpoint reference text files
-
-Notes:
-- Dice/forgetting columns are auto-detected from available metric keys.
-- If forgetting (or dice) is missing, the bundle includes caveats rather than failing.
-
-## Status: Code-Complete / Run-Pending
-
-All core components are implemented and tested (69 tests passing):
-- [x] Per-task dataloaders and transitions (multi_task_trainer.py)
-- [x] Checkpoint manager and task-wise evaluator
-- [x] Teacher abstraction with snapshot/checkpoint modes
-- [x] 4 KD modes: logit, feature, weighted, boundary
-- [x] Resumable multi-task sequences
-- [x] Config validation with actionable errors
-- [x] Forgetting metrics (backward transfer matrix)
-
-### Remaining for execution
-- [ ] First real-data run (blocked on CUDA driver update)
-- [ ] Full continual metrics table generation across methods
-- [ ] Confidence intervals and statistical testing
+- [x] Task A/B definitions with explicit class groups
+- [x] Multi-class TotalSeg adapter
+- [x] Experiment protocol documented
+- [x] MedSAM3 baseline config
+- [x] A→B continual pipeline (multi_task_trainer.py)
+- [x] Forgetting/BWT/FWT computation
+- [x] 126+ tests passing
+- [ ] MedSAM3 checkpoint acquisition
+- [ ] Full 50-epoch A→B runs on real data
+- [ ] Multi-seed statistical analysis

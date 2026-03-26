@@ -4,6 +4,52 @@ This file is updated alongside repository progress so experiment intent and impl
 
 ---
 
+## 2026-03-27 — Phase-Next Alignment: MedSAM3 Baseline + Task A/B Definition
+
+### What was aligned
+
+**PI direction adopted:**
+- Task A = TotalSegmentator abdominal organs (liver, spleen, kidney_L, kidney_R, pancreas)
+- Task B = TotalSegmentator pelvic muscles (gluteus_maximus_L/R, gluteus_medius_L/R, iliopsoas_L)
+- Both tasks: 6 classes (BG + 5 structures), no overlap
+- MedSAM3 = teacher baseline (checkpoint-based distillation)
+- Student = MONAI 3D U-Net
+- Order: Distillation first (A), then continual (A→B) with replay/EWC
+
+**Baseline matrix (4 conditions):**
+1. Student finetune A→B (no KD) — lower bound
+2. Student + MedSAM3 KD on Task A — distillation baseline
+3. Student A→B with replay only — no teacher
+4. Student A→B with KD + replay + EWC — full method
+
+### Implementation changes
+
+| Change | Files |
+|--------|-------|
+| Multi-class TotalSeg adapter | `src/data/totalseg.py` (extended: `organs` list param), `src/data/registry.py` |
+| Task A config | `configs/tasks/taskA_organs.yaml` |
+| Task B config | `configs/tasks/taskB_muscles.yaml` |
+| A→B sequence config | `configs/tasks/totalseg_AB_sequence.yaml` |
+| MedSAM3 baseline config | `configs/methods/distill_medsam3_baseline.yaml` |
+| Experiment protocol | `docs/experiment_protocol.md` (full rewrite) |
+| Continual runner script | `scripts/run_continual.py` (NEW) |
+| Synthetic A/B test config | `configs/tasks/synthetic_AB_test.yaml` |
+
+### Validation evidence
+
+- Synthetic A→B dry run: finetune — PASS (forgetting=-0.0077, all artifacts emitted)
+- Synthetic A→B dry run: replay — PASS (forgetting=-0.0067, all artifacts emitted)
+- Artifacts confirmed: `task_eval_matrix.csv`, `forgetting.json`, `multi_task_summary.json`
+- All 126 tests pass
+
+### Remaining blockers
+
+1. **MedSAM3 checkpoint:** No pretrained checkpoint on this workstation. Needed for Conditions 2 and 4.
+2. **Full real-data A→B run:** Not yet executed (requires multi-hour GPU time per condition).
+3. **Multi-seed runs:** Statistical validation requires seeds {42, 123, 456}.
+
+---
+
 ## 2026-03-26 — Phase-5.1: Data Corruption Unblock + Clean Baseline Rerun
 
 ### Summary

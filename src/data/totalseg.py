@@ -9,15 +9,17 @@ from torch.utils.data import Dataset
 
 
 class TotalSegmentatorDataset(Dataset):
-    """Minimal TotalSegmentator loader (scaffold).
+    """TotalSegmentator loader supporting single-organ binary and multi-organ
+    multi-class segmentation.
 
-    Current mode:
-    - single-organ binary segmentation
-    - center crop or pad to target shape
+    Single-organ mode (backward compatible):
+        organ="liver"  →  2 classes (0=background, 1=organ)
 
-    TODO:
-    - multi-organ multi-class mapping
-    - spacing-aware resampling and normalization policy
+    Multi-organ mode:
+        organs=["liver", "spleen", "pancreas"]
+        →  N+1 classes (0=background, 1=liver, 2=spleen, 3=pancreas)
+
+    If both ``organ`` and ``organs`` are provided, ``organs`` takes precedence.
     """
 
     def __init__(
@@ -25,6 +27,7 @@ class TotalSegmentatorDataset(Dataset):
         root: str,
         split_ids: Sequence[str],
         organ: str = "liver",
+        organs: Sequence[str] | None = None,
         target_shape: tuple[int, int, int] = (128, 128, 128),
     ):
         self.root = Path(root)
@@ -38,12 +41,22 @@ class TotalSegmentatorDataset(Dataset):
         if not self.ids:
             raise ValueError("TotalSegmentator split_ids is empty. Provide at least one subject id.")
 
-        self.organ = organ
+        # Multi-organ list takes precedence over single organ
+        if organs is not None and len(organs) > 0:
+            self.organs = list(organs)
+        else:
+            self.organs = [organ]
+
+        self.num_classes = len(self.organs) + 1  # +1 for background
         self.target_shape = target_shape
 
+        # For backward compat
+        self.organ = self.organs[0]
+
     @classmethod
-    def validate_subject(cls, root: str, sid: str, organ: str = "liver") -> dict:
-        """Check that a subject directory has the expected files and return diagnostics."""
+    def validate_subject(cls, root: str, sid: str, organ: str = "liver",
+                         organs: Sequence[str] | None = None) -> dict:
+        """Check that a subject directory has the expected files."""
         root_path = Path(root)
         sp = root_path / sid
         result = {"id": sid, "valid": True, "errors": []}
@@ -55,10 +68,12 @@ class TotalSegmentatorDataset(Dataset):
         if not ct_path.exists():
             result["valid"] = False
             result["errors"].append(f"Missing: {ct_path}")
-        seg_path = sp / "segmentations" / f"{organ}.nii.gz"
-        if not seg_path.exists():
-            result["valid"] = False
-            result["errors"].append(f"Missing: {seg_path}")
+        check_organs = list(organs) if organs else [organ]
+        for org in check_organs:
+            seg_path = sp / "segmentations" / f"{org}.nii.gz"
+            if not seg_path.exists():
+                result["valid"] = False
+                result["errors"].append(f"Missing: {seg_path}")
         return result
 
     def __len__(self):
@@ -103,17 +118,23 @@ class TotalSegmentatorDataset(Dataset):
         ct = self._load_nii(sp / "ct.nii.gz")
         if ct.ndim != 3:
             raise ValueError(f"Expected 3D CT volume for {sid}, got shape {ct.shape}")
-        organ_mask = self._load_nii(sp / "segmentations" / f"{self.organ}.nii.gz")
-        if organ_mask.ndim != 3:
-            raise ValueError(f"Expected 3D organ mask for {sid}, got shape {organ_mask.shape}")
 
         ct = self._crop_or_pad(ct)
-        organ_mask = self._crop_or_pad((organ_mask > 0).astype(np.float32))
+
+        # Build multi-class label map: 0=background, i=organs[i-1]
+        label = np.zeros(self.target_shape, dtype=np.int64)
+        for class_idx, org in enumerate(self.organs, start=1):
+            mask = self._load_nii(sp / "segmentations" / f"{org}.nii.gz")
+            if mask.ndim != 3:
+                raise ValueError(f"Expected 3D mask for {sid}/{org}, got shape {mask.shape}")
+            mask = self._crop_or_pad((mask > 0).astype(np.float32))
+            # Later organs overwrite earlier ones at overlapping voxels
+            label[mask > 0.5] = class_idx
 
         # simple z-score normalization
         ct = (ct - ct.mean()) / (ct.std() + 1e-6)
 
         x = torch.from_numpy(ct[None, ...]).float()  # C,Z,Y,X
-        y = torch.from_numpy(organ_mask).long()      # Z,Y,X binary class indices
+        y = torch.from_numpy(label)                   # Z,Y,X class indices
 
         return {"image": x, "label": y, "id": sid}

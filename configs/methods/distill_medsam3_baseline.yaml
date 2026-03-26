@@ -1,0 +1,43 @@
+# MedSAM3 Knowledge Distillation Baseline
+#
+# Used in Condition 2 of the experiment protocol:
+#   Student + MedSAM3 KD on Task A (organs), then finetune on Task B (muscles)
+#
+# Requirements:
+#   - MedSAM3 teacher checkpoint at the path below
+#   - Checkpoint must contain either:
+#     {"model_state_dict": ...} or a raw state_dict
+#   - Architecture must match student (monai_unet with same channels/strides)
+#
+# Smoke test:
+#   python scripts/run_continual.py \
+#     --base-config configs/base.yaml \
+#     --task-config configs/tasks/totalseg_AB_sequence.yaml \
+#     --method-config configs/methods/distill_medsam3_baseline.yaml \
+#     --dataset-config configs/datasets/totalseg_train_clean.yaml \
+#     --dry-run
+#
+# Expected artifacts:
+#   outputs/continual_medsam3/{taskA_organs,taskB_muscles}/checkpoints/
+#   outputs/continual_medsam3/task_eval_matrix.csv
+#   outputs/continual_medsam3/forgetting.json
+#   outputs/continual_medsam3/multi_task_summary.json
+#
+# Error behavior:
+#   - Missing checkpoint → FileNotFoundError with actionable message
+#   - Architecture mismatch → RuntimeError from state_dict load
+#   - Missing model_template → ValueError (teacher needs architecture ref)
+
+method:
+  name: distill
+  kd:
+    mode: logit
+    weight: 0.7
+    temperature: 2.0
+    cache:
+      enabled: true
+      dir: outputs/.teacher_cache
+    teacher:
+      type: checkpoint
+      ckpt_path: checkpoints/medsam3_teacher.pt   # UPDATE to actual path
+      model_id: medsam3_baseline

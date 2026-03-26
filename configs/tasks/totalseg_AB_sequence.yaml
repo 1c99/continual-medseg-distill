@@ -1,0 +1,45 @@
+# Continual Learning Sequence: Task A (Organs) → Task B (Muscles)
+#
+# Class-incremental setting on TotalSegmentator:
+# - Task A: 5 abdominal organs (liver, spleen, kidneys, pancreas)
+# - Task B: 5 pelvic muscles (gluteus maximus/medius, iliopsoas)
+#
+# Both tasks share the same subjects (same CT scans) but different
+# segmentation targets. No class overlap between A and B.
+#
+# Note: Each task independently maps to classes 0-5. The model
+# output head has 6 channels throughout. This is a task-incremental
+# setting where the task identity determines class interpretation.
+
+task_sequence:
+  name: totalseg_organs_muscles_AB
+  setting: task_incremental
+
+  tasks:
+    - id: taskA_organs
+      description: "Abdominal organ segmentation (5 organs)"
+      data:
+        source: totalseg
+        totalseg:
+          organs:
+            - liver
+            - spleen
+            - kidney_left
+            - kidney_right
+            - pancreas
+      model:
+        out_channels: 6
+
+    - id: taskB_muscles
+      description: "Pelvic muscle segmentation (5 muscles)"
+      data:
+        source: totalseg
+        totalseg:
+          organs:
+            - gluteus_maximus_left
+            - gluteus_maximus_right
+            - gluteus_medius_left
+            - gluteus_medius_right
+            - iliopsoas_left
+      model:
+        out_channels: 6

@@ -121,10 +121,15 @@ def create_loaders(cfg: Dict) -> Tuple[DataLoader, DataLoader]:
             )
 
         organ = tcfg.get("organ", "liver")
+        organs = tcfg.get("organs")  # multi-class list (takes precedence)
         shape = tuple(tcfg.get("shape", [128, 128, 128]))
 
-        train_ds = TotalSegmentatorDataset(root=root, split_ids=train_ids, organ=organ, target_shape=shape)
-        val_ds = TotalSegmentatorDataset(root=root, split_ids=val_ids, organ=organ, target_shape=shape)
+        train_ds = TotalSegmentatorDataset(
+            root=root, split_ids=train_ids, organ=organ, organs=organs, target_shape=shape,
+        )
+        val_ds = TotalSegmentatorDataset(
+            root=root, split_ids=val_ids, organ=organ, organs=organs, target_shape=shape,
+        )
     elif source == "brats21":
         bcfg = data_cfg.get("brats21", {})
         root = bcfg.get("root")

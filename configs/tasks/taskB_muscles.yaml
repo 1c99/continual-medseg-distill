@@ -1,0 +1,46 @@
+# Task B: Muscle Segmentation (TotalSegmentator subset)
+#
+# 6 classes: 0=background, 1=gluteus_maximus_left, 2=gluteus_maximus_right,
+#            3=gluteus_medius_left, 4=gluteus_medius_right, 5=iliopsoas_left
+#
+# These muscles are chosen because:
+# - Present in abdominal/pelvic CT (same scan region as Task A organs)
+# - Well-represented in TotalSegmentator
+# - No overlap with Task A (organs) — zero shared class IDs
+# - Clinically relevant for sarcopenia assessment
+
+task:
+  id: taskB_muscles
+  description: "Pelvic muscle segmentation (5 muscles)"
+
+  classes:
+    0: background
+    1: gluteus_maximus_left
+    2: gluteus_maximus_right
+    3: gluteus_medius_left
+    4: gluteus_medius_right
+    5: iliopsoas_left
+
+  num_classes: 6  # including background
+
+  organs:
+    - gluteus_maximus_left
+    - gluteus_maximus_right
+    - gluteus_medius_left
+    - gluteus_medius_right
+    - iliopsoas_left
+
+# Data override: use these muscles in the TotalSeg loader
+data:
+  source: totalseg
+  totalseg:
+    organs:
+      - gluteus_maximus_left
+      - gluteus_maximus_right
+      - gluteus_medius_left
+      - gluteus_medius_right
+      - iliopsoas_left
+
+# Model override: 6 output channels (BG + 5 muscles)
+model:
+  out_channels: 6

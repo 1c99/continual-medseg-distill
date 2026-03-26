@@ -1,0 +1,45 @@
+# Task A: Abdominal Organ Segmentation (TotalSegmentator subset)
+#
+# 6 classes: 0=background, 1=liver, 2=spleen, 3=kidney_left, 4=kidney_right, 5=pancreas
+#
+# These organs are chosen because:
+# - Clinically significant in abdominal CT
+# - Well-represented in TotalSegmentator
+# - No overlap with Task B (muscles)
+
+task:
+  id: taskA_organs
+  description: "Abdominal organ segmentation (5 organs)"
+
+  classes:
+    0: background
+    1: liver
+    2: spleen
+    3: kidney_left
+    4: kidney_right
+    5: pancreas
+
+  num_classes: 6  # including background
+
+  # These map to TotalSegmentator segmentation file names
+  organs:
+    - liver
+    - spleen
+    - kidney_left
+    - kidney_right
+    - pancreas
+
+# Data override: use these organs in the TotalSeg loader
+data:
+  source: totalseg
+  totalseg:
+    organs:
+      - liver
+      - spleen
+      - kidney_left
+      - kidney_right
+      - pancreas
+
+# Model override: 6 output channels (BG + 5 organs)
+model:
+  out_channels: 6
