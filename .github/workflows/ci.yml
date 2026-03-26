@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e .
+      - name: Run unit tests
+        run: |
+          for t in tests/test_*.py; do
+            echo "=== $t ==="
+            python "$t" || exit 1
+          done
+
+  config-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e .
+      - name: Validate configs
+        run: |
+          python -c "
+          from src.utils.config import load_yaml
+          from src.utils.config_validation import validate_config
+          import sys, glob
+
+          # Validate base config (with synthetic data, should pass)
+          cfg = load_yaml('configs/base.yaml')
+          cfg.setdefault('model', {})['in_channels'] = 1
+          cfg.setdefault('model', {})['out_channels'] = 3
+          cfg.setdefault('data', {})['source'] = 'synthetic'
+          cfg.setdefault('method', {})['name'] = 'finetune'
+          errors = validate_config(cfg, strict=False)
+          if errors:
+              print('Base config errors:')
+              for e in errors:
+                  print(f'  - {e}')
+              sys.exit(1)
+          print('[ok] Base config valid')
+          "
+
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e .
+      - name: Smoke test (dry-run)
+        run: python scripts/train.py --config configs/base.yaml --dry-run
