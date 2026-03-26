@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import random
+from pathlib import Path
 from typing import Dict, List
 import torch
 import torch.nn.functional as F
@@ -71,3 +72,15 @@ class ReplayMethod(ContinualMethod):
         # update memory after computing loss
         self._push_batch_to_memory(batch)
         return loss
+
+    def save_state(self, path: Path) -> None:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        state = {
+            "memory": [{"image": m["image"], "label": m["label"]} for m in self.memory],
+        }
+        torch.save(state, path)
+
+    def load_state(self, path: Path) -> None:
+        state = torch.load(Path(path), map_location="cpu", weights_only=False)
+        self.memory = state.get("memory", [])

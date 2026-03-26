@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import logging
+from pathlib import Path
 from typing import Dict
 import torch
 import torch.nn.functional as F
@@ -117,3 +118,26 @@ class DistillReplayEWCMethod(ReplayMethod):
             self.fisher = self._estimate_fisher(model, train_loader, str(device), self.fisher_samples)
         # Param snapshot
         self.prev_params = {n: p.detach().cpu().clone() for n, p in model.named_parameters()}
+
+    def save_state(self, path: Path, model_template: torch.nn.Module | None = None) -> None:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        state: Dict = {
+            "fisher": self.fisher,
+            "prev_params": self.prev_params,
+            "memory": [{"image": m["image"], "label": m["label"]} for m in self.memory],
+        }
+        if self.teacher_model is not None:
+            state["teacher_state_dict"] = self.teacher_model.state_dict()
+        torch.save(state, path)
+
+    def load_state(self, path: Path, model_template: torch.nn.Module | None = None) -> None:
+        state = torch.load(Path(path), map_location="cpu", weights_only=False)
+        self.fisher = state.get("fisher", {})
+        self.prev_params = state.get("prev_params", {})
+        self.memory = state.get("memory", [])
+        if "teacher_state_dict" in state and model_template is not None:
+            self.teacher_model = copy.deepcopy(model_template).eval()
+            self.teacher_model.load_state_dict(state["teacher_state_dict"])
+            for p in self.teacher_model.parameters():
+                p.requires_grad = False

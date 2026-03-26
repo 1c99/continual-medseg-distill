@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Dict
 import torch
 import torch.nn.functional as F
@@ -58,3 +59,13 @@ class ContinualMethod:
     def post_task_update(self, model: torch.nn.Module, **kwargs) -> None:
         # Hook for method-specific memory/teacher/Fisher updates.
         return
+
+    def save_state(self, path: Path) -> None:
+        """Save method-specific state (teacher, Fisher, memory) to disk."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save({}, path)
+
+    def load_state(self, path: Path) -> None:
+        """Load method-specific state from disk."""
+        pass

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import logging
+from pathlib import Path
 from typing import Dict
 import torch
 import torch.nn.functional as F
@@ -66,3 +67,20 @@ class DistillMethod(ContinualMethod):
         self.teacher_model = copy.deepcopy(model).eval()
         for p in self.teacher_model.parameters():
             p.requires_grad = False
+
+    def save_state(self, path: Path, model_template: torch.nn.Module | None = None) -> None:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        state: Dict = {}
+        if self.teacher_model is not None:
+            state["teacher_state_dict"] = self.teacher_model.state_dict()
+        torch.save(state, path)
+
+    def load_state(self, path: Path, model_template: torch.nn.Module | None = None) -> None:
+        state = torch.load(Path(path), map_location="cpu", weights_only=False)
+        if "teacher_state_dict" in state and model_template is not None:
+            import copy
+            self.teacher_model = copy.deepcopy(model_template).eval()
+            self.teacher_model.load_state_dict(state["teacher_state_dict"])
+            for p in self.teacher_model.parameters():
+                p.requires_grad = False

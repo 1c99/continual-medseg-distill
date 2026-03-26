@@ -197,28 +197,102 @@ Note: higher train_loss is expected with DiceCE (Dice+CE combined vs CE alone). 
 
 ---
 
+## 2026-03-26 — Phase-3: Multi-Task Orchestrator + Teacher Persistence + Forgetting Evidence
+
+### Summary
+Implemented the continual learning execution backbone: multi-task sequential trainer with per-task evaluation, backward transfer (forgetting) measurement, and full method state persistence (teacher, Fisher, replay buffer). All 4 methods run through multi-task sequences on synthetic data. 43 tests pass across 5 suites.
+
+### What was implemented
+
+**1. Multi-task sequential trainer (`src/engine/multi_task_trainer.py`)**
+- `run_task_sequence()`: trains a model on a sequence of tasks with per-task evaluation on all seen tasks
+- Per-task config override merging — each task can specify its own data source/split
+- Task checkpoint saving (model + method state) after each task
+- `compute_forgetting()`: computes backward transfer matrix from eval history
+  - Forgetting_i = perf(task_i, after_task_i) - perf(task_i, after_last_task)
+  - Reports per-task forgetting + mean forgetting
+
+**2. Evidence outputs (per-task tables + forgetting)**
+- `task_eval_matrix.csv`: all (trained_on, evaluated_on) metric pairs
+- `forgetting.json`: full forgetting matrix + per-task + mean forgetting
+- `multi_task_summary.json`: task order, num tasks, forgetting stats
+
+**3. Method state persistence (save_state / load_state)**
+- `src/methods/base.py`: `save_state(path)`, `load_state(path)` interface
+- `src/methods/replay.py`: saves/loads memory buffer
+- `src/methods/distill.py`: saves/loads teacher model state_dict
+- `src/methods/distill_replay_ewc.py`: saves/loads teacher + Fisher diagonals + prev_params + memory buffer
+- Round-trip verified: save → fresh method → load → identical state
+
+**4. Config: synthetic 2-task sequence (`configs/tasks/synthetic_2task.yaml`)**
+- Defines a 2-task sequence for testing the orchestrator on synthetic data
+
+### Test summary (43/43 pass)
+
+| Test suite | Tests | Status |
+|-----------|-------|--------|
+| test_metrics_edge_cases.py | 12 | PASS |
+| test_dicece_loss.py | 5 | PASS |
+| test_fisher_ewc.py | 8 | PASS |
+| test_reproducibility.py | 5 | PASS |
+| test_multi_task.py | 13 | PASS |
+| Synthetic ablation (4 methods) | 4 | PASS |
+
+### test_multi_task.py breakdown (13/13 pass)
+
+**Multi-task loop (6 tests):**
+- finetune 2-task sequence: trains, evaluates both tasks, produces evidence files
+- replay 2-task sequence: buffer has samples after training
+- distill 2-task sequence: teacher exists after 2 tasks
+- distill_replay_ewc 2-task: teacher + Fisher + prev_params + memory all populated
+- checkpoint saved: per-task checkpoint files exist
+- eval matrix CSV: correct rows (1 after task_0, 2 after task_1 = 3 total)
+
+**Forgetting computation (4 tests):**
+- No forgetting: identical perf → forgetting = 0
+- Positive forgetting: decreased perf → forgetting > 0
+- Negative forgetting: backward transfer → forgetting < 0
+- Three tasks: correct matrix computation
+
+**Teacher persistence (3 tests):**
+- Distill save/load round-trip: teacher weights match exactly
+- EWC save/load round-trip: Fisher + prev_params + teacher + memory all match
+- Replay save/load round-trip: memory buffer matches
+
+### Method readiness assessment (updated)
+
+| Method | Status | Notes |
+|--------|--------|-------|
+| finetune | Production-grade | DiceCE loss, multi-task ready, reproducible seeds |
+| replay | Research-grade | DiceCE, buffer save/load, multi-task ready |
+| distill | Research-grade | DiceCE + KD, teacher persistence, multi-task ready |
+| distill_replay_ewc | **Research-grade** | DiceCE + KD + Fisher EWC, full state persistence, multi-task ready |
+
+---
+
 ## Current Technical Status
 
 ### Working now
 - Full 4-method ablation suite with DiceCE loss (configurable)
+- Multi-task sequential training with per-task evaluation and forgetting measurement
+- Teacher/Fisher/memory checkpoint persistence (save/load between tasks and runs)
 - Fisher-based EWC (diagonal Fisher estimation from training data)
 - Reproducibility: deterministic seeds, git hash, env metadata in every run
 - Data validation script ready for workstation deployment
-- 30 tests across 4 suites, all passing
+- 43 tests across 5 suites, all passing
 
 ### Remaining blockers
 1. **No real-data run yet** — `scripts/validate_data.py` written but workstation paths not accessible from dev machine. Run on workstation:
    ```bash
    python scripts/validate_data.py --dataset-config configs/datasets/totalseg_example.yaml
    ```
-2. **Teacher checkpoint persistence** — distill methods still use in-memory `deepcopy`, no save/load to disk
-3. **Multi-task orchestration** — trainer.py handles single task; no outer loop for task sequence with `post_task_update()` between tasks
-4. **BraTS21 path layout** — adapter assumes `root/{case_id}/{case_id}_*.nii.gz`; may need adjustment if data uses flat `imagesTr/labelsTr/` layout
+2. **BraTS21 path layout** — adapter assumes `root/{case_id}/{case_id}_*.nii.gz`; may need adjustment if data uses flat `imagesTr/labelsTr/` layout
+3. **Multi-task ablation script** — `run_ablations.py` runs single-task per method; needs integration with `run_task_sequence()` for multi-task ablation runs
 
 ### Next top 3 actions
 1. Run `scripts/validate_data.py` on workstation to produce M2 real-data smoke report
-2. Implement multi-task training loop (task sequence orchestrator)
-3. Add teacher checkpoint persistence for distill/distill_replay_ewc methods
+2. Add multi-task ablation runner (wraps `run_task_sequence()` across all 4 methods)
+3. First real-data continual learning experiment with TotalSeg task sequence
 
 ---
 
@@ -253,9 +327,11 @@ Note: higher train_loss is expected with DiceCE (Dice+CE combined vs CE alone). 
 - [x] `v0.7`: DiceCE loss (medical segmentation standard)
 - [x] `v0.8`: Reproducibility hardening (seed, git hash, env metadata)
 - [x] `v0.9`: Data validation script for real-data smoke testing
-- [ ] `v1.0`: Real-data TotalSeg run with split-manifest (pending workstation)
-- [ ] `v1.1`: Multi-task sequence orchestrator
-- [ ] `v1.2`: Teacher checkpoint persistence
+- [x] `v1.0`: Multi-task sequence orchestrator with per-task evaluation
+- [x] `v1.1`: Teacher/Fisher/memory checkpoint persistence (save/load)
+- [x] `v1.2`: Forgetting measurement (backward transfer matrix + per-task + mean)
+- [ ] `v1.3`: Real-data TotalSeg run with split-manifest (pending workstation)
+- [ ] `v1.4`: Multi-task ablation runner (all 4 methods × task sequence)
 
 ---
 
@@ -277,6 +353,7 @@ python tests/test_metrics_edge_cases.py
 python tests/test_dicece_loss.py
 python tests/test_fisher_ewc.py
 python tests/test_reproducibility.py
+python tests/test_multi_task.py
 ```
 
 If dependency errors occur, install project deps first:

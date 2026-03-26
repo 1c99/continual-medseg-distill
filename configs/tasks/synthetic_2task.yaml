@@ -1,0 +1,7 @@
+task_sequence:
+  name: synthetic_2task
+  tasks:
+    - id: task_0
+      # Uses base data config (synthetic) as-is
+    - id: task_1
+      # Same synthetic data, tests orchestration + forgetting measurement
