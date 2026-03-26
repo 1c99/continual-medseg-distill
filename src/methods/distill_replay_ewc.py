@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import copy
+import logging
 from typing import Dict
 import torch
 import torch.nn.functional as F
 
 from .replay import ReplayMethod
+
+logger = logging.getLogger(__name__)
 
 
 class DistillReplayEWCMethod(ReplayMethod):
@@ -28,6 +31,28 @@ class DistillReplayEWCMethod(ReplayMethod):
         self.teacher_model: torch.nn.Module | None = None
         self.prev_params: Dict[str, torch.Tensor] = {}
 
+    def _validate_config(self) -> None:
+        super()._validate_config()
+        mcfg = self.cfg.get("method", {})
+        if "kd" not in mcfg:
+            logger.warning(
+                "DistillReplayEWCMethod: missing method.kd config section; "
+                "using defaults (weight=1.0, temperature=2.0)"
+            )
+        if "ewc" not in mcfg:
+            logger.warning(
+                "DistillReplayEWCMethod: missing method.ewc config section; "
+                "using defaults (weight=0.1)"
+            )
+        kd_cfg = mcfg.get("kd", {})
+        if "weight" not in kd_cfg:
+            logger.warning("DistillReplayEWCMethod: method.kd.weight not set; defaulting to 1.0")
+        if "temperature" not in kd_cfg:
+            logger.warning("DistillReplayEWCMethod: method.kd.temperature not set; defaulting to 2.0")
+        ewc_cfg = mcfg.get("ewc", {})
+        if "weight" not in ewc_cfg:
+            logger.warning("DistillReplayEWCMethod: method.ewc.weight not set; defaulting to 0.1")
+
     def _ewc_penalty(self, model: torch.nn.Module, device: str) -> torch.Tensor:
         if not self.prev_params:
             return torch.tensor(0.0, device=device)
@@ -41,11 +66,11 @@ class DistillReplayEWCMethod(ReplayMethod):
         # base CE + replay from ReplayMethod
         base_loss = super().training_loss(model, batch, device)
 
-        x = batch["image"].to(device)
-        student_logits = model(x)
-
-        kd = torch.tensor(0.0, device=device)
+        # KD loss (only when teacher exists, i.e. after first task)
+        kd = torch.tensor(0.0, device=base_loss.device)
         if self.teacher_model is not None:
+            x = batch["image"].to(base_loss.device)
+            student_logits = model(x)
             with torch.no_grad():
                 teacher_logits = self.teacher_model(x)
             T = self.temperature
@@ -55,7 +80,7 @@ class DistillReplayEWCMethod(ReplayMethod):
                 reduction="batchmean",
             ) * (T * T)
 
-        ewc = self._ewc_penalty(model, device)
+        ewc = self._ewc_penalty(model, base_loss.device)
         return base_loss + self.kd_weight * kd + self.ewc_weight * ewc
 
     def post_task_update(self, model: torch.nn.Module) -> None:

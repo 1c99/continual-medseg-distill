@@ -1,6 +1,6 @@
 method:
   name: replay
-  params:
+  replay:
     buffer_size: 200
-    sample_strategy: random
+    weight: 1.0
     # TODO: implement herding / uncertainty-aware replay

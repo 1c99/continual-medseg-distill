@@ -1,7 +1,5 @@
 method:
   name: distill
-  params:
+  kd:
+    weight: 0.7
     temperature: 2.0
-    alpha_kd: 0.7
-    alpha_ce: 0.3
-    # TODO: implement teacher checkpoint management

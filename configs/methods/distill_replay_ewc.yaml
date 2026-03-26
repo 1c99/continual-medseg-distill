@@ -1,11 +1,11 @@
 method:
   name: distill_replay_ewc
-  params:
+  kd:
+    weight: 0.5
     temperature: 2.0
-    alpha_kd: 0.5
-    alpha_ce: 0.3
-    alpha_ewc: 0.2
-    ewc_lambda: 50.0
-    fisher_estimation_samples: 64
+  replay:
     buffer_size: 200
+    weight: 1.0
+  ewc:
+    weight: 0.2
     # TODO: implement proper EWC diagonal Fisher estimation + accumulation

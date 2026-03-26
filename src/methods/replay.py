@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 import random
 from typing import Dict, List
 import torch
 import torch.nn.functional as F
 
 from .base import ContinualMethod
+
+logger = logging.getLogger(__name__)
 
 
 class ReplayMethod(ContinualMethod):
@@ -20,6 +23,17 @@ class ReplayMethod(ContinualMethod):
         self.buffer_size = int(replay_cfg.get("buffer_size", 64))
         self.replay_weight = float(replay_cfg.get("weight", 1.0))
         self.memory: List[Dict[str, torch.Tensor]] = []
+
+    def _validate_config(self) -> None:
+        mcfg = self.cfg.get("method", {})
+        if "replay" not in mcfg:
+            logger.warning(
+                "ReplayMethod: missing method.replay config section; "
+                "using defaults (buffer_size=64, weight=1.0)"
+            )
+        replay_cfg = mcfg.get("replay", {})
+        if "buffer_size" not in replay_cfg:
+            logger.warning("ReplayMethod: method.replay.buffer_size not set; defaulting to 64")
 
     def _push_batch_to_memory(self, batch: Dict[str, torch.Tensor]) -> None:
         x = batch["image"].detach().cpu()

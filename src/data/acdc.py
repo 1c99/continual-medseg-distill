@@ -114,13 +114,31 @@ class ACDCDataset(Dataset):
         image = self._load_nii(image_path)
         label = self._load_nii(label_path)
 
+        if image.ndim != 3:
+            raise ValueError(
+                f"Expected 3D image for {sid}, got shape {image.shape}"
+            )
+        if label.ndim != 3:
+            raise ValueError(
+                f"Expected 3D label for {sid}, got shape {label.shape}"
+            )
+
         image = self._crop_or_pad(image)
         label = self._crop_or_pad(label)
 
         if self.normalize:
             image = self._zscore(image)
 
+        label_int = label.astype(np.int64)
+        # ACDC classes: 0=BG, 1=RV, 2=MYO, 3=LV
+        unexpected = set(np.unique(label_int).tolist()) - {0, 1, 2, 3}
+        if unexpected:
+            raise ValueError(
+                f"Unexpected label values {unexpected} in {label_path}. "
+                "ACDC expects classes {0=BG, 1=RV, 2=MYO, 3=LV}."
+            )
+
         x = torch.from_numpy(image[None, ...]).float()  # C,Z,Y,X
-        y = torch.from_numpy(label.astype(np.int64)).long()  # Z,Y,X
+        y = torch.from_numpy(label_int).long()  # Z,Y,X
 
         return {"image": x, "label": y, "id": sid}

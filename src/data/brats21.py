@@ -93,6 +93,10 @@ class Brats21Dataset(Dataset):
         for m in self.MODALITIES:
             p = case_dir / f"{sid}_{m}.nii.gz"
             vol = self._load_nii(p)
+            if vol.ndim != 3:
+                raise ValueError(
+                    f"Expected 3D volume for {sid} modality {m}, got shape {vol.shape}"
+                )
             vol = self._crop_or_pad(vol)
             if self.normalize_per_channel:
                 vol = self._zscore(vol)
@@ -100,11 +104,21 @@ class Brats21Dataset(Dataset):
 
         seg_path = case_dir / f"{sid}_seg.nii.gz"
         seg = self._load_nii(seg_path)
+        if seg.ndim != 3:
+            raise ValueError(
+                f"Expected 3D segmentation for {sid}, got shape {seg.shape}"
+            )
         seg = self._crop_or_pad(seg)
 
         # BraTS labels can be {0,1,2,4}; remap 4->3 for contiguous class ids.
         seg = seg.astype(np.int64)
         seg[seg == 4] = 3
+        unexpected = set(np.unique(seg).tolist()) - {0, 1, 2, 3}
+        if unexpected:
+            raise ValueError(
+                f"Unexpected label values {unexpected} in {seg_path} after remap. "
+                "Expected only {0, 1, 2, 3}."
+            )
 
         x = torch.from_numpy(np.stack(channels, axis=0)).float()  # C,Z,Y,X
         y = torch.from_numpy(seg).long()  # Z,Y,X

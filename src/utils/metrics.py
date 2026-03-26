@@ -34,7 +34,8 @@ def _surface(mask: np.ndarray) -> np.ndarray:
 
     if not np.any(mask):
         return np.zeros_like(mask, dtype=bool)
-    eroded = binary_erosion(mask, structure=np.ones((3, 3, 3), dtype=bool), border_value=0)
+    struct = np.ones((3,) * mask.ndim, dtype=bool)
+    eroded = binary_erosion(mask, structure=struct, border_value=0)
     return mask & ~eroded
 
 

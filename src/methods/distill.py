@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import copy
+import logging
 from typing import Dict
 import torch
 import torch.nn.functional as F
 
 from .base import ContinualMethod
+
+logger = logging.getLogger(__name__)
 
 
 class DistillMethod(ContinualMethod):
@@ -23,6 +26,19 @@ class DistillMethod(ContinualMethod):
         self.kd_weight = float(kd_cfg.get("weight", 1.0))
         self.temperature = float(kd_cfg.get("temperature", 2.0))
         self.teacher_model: torch.nn.Module | None = None
+
+    def _validate_config(self) -> None:
+        mcfg = self.cfg.get("method", {})
+        if "kd" not in mcfg:
+            logger.warning(
+                "DistillMethod: missing method.kd config section; "
+                "using defaults (weight=1.0, temperature=2.0)"
+            )
+        kd_cfg = mcfg.get("kd", {})
+        if "weight" not in kd_cfg:
+            logger.warning("DistillMethod: method.kd.weight not set; defaulting to 1.0")
+        if "temperature" not in kd_cfg:
+            logger.warning("DistillMethod: method.kd.temperature not set; defaulting to 2.0")
 
     def training_loss(self, model: torch.nn.Module, batch: Dict, device: str) -> torch.Tensor:
         x = batch["image"].to(device)
