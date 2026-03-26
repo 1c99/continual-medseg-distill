@@ -4,6 +4,51 @@ This file is updated alongside repository progress so experiment intent and impl
 
 ---
 
+## 2026-03-26 — Phase-5.1: Data Corruption Unblock + Clean Baseline Rerun
+
+### Summary
+Identified and removed corrupt NIfTI files from TotalSegmentator split, ran all 4 baseline methods on clean data, validated AMP mixed precision path on GPU.
+
+### Corruption Root Cause
+- Subject **s0864** in `totalseg_train_v1.json` (val split) has a corrupt `ct.nii.gz` — gzip CRC check failure (`0x5ab25329 != 0x84f031a9`)
+- This was the sole blocker for the Phase-5 baseline suite. All 100 train subjects are clean; only 1 of 20 val subjects is corrupt.
+- Root cause: likely incomplete download or disk corruption of the TotalSegmentator dataset file.
+
+### Clean Split
+- Original: 100 train / 20 val → Clean: **100 train / 19 val**
+- File: `data/splits/totalseg_train_clean_v1.json`
+
+### Baseline Results (5 epochs, liver segmentation, 128^3 volumes)
+
+| Method | Voxel Acc | Dice (liver) | HD95 | Time (s) | Status |
+|--------|-----------|-------------|------|----------|--------|
+| finetune | 0.9299 | 0.5926 | 34.54 | 322 | PASS |
+| replay | 0.9121 | 0.5415 | 31.02 | 329 | PASS |
+| distill | 0.9295 | 0.5883 | 34.97 | 324 | PASS |
+| distill_replay_ewc | 0.9103 | 0.5363 | 31.26 | 366 | PASS |
+
+Notes:
+- All methods learning (loss decreasing, dice > 0.5 after 5 epochs)
+- HD95 still high — expected at 5 epochs, would improve with full 50-epoch run
+- finetune and distill are leading in dice; replay/ewc sacrifice dice for stability (lower HD95)
+
+### AMP Validation
+- AMP ON confirmed working on GPU with synthetic data (2 epochs, 10 steps)
+- Peak GPU memory reduced by **29.9%** (138.4MB → 97.1MB) with AMP ON
+- Convergence behavior identical (val_acc matches AMP OFF)
+
+### New Scripts
+- `scripts/scan_corrupt_nifti.py` — scans split manifests for corrupt NIfTI files (gzip CRC + nibabel header)
+- `scripts/make_clean_split.py` — generates clean splits by removing corrupt subject IDs
+- `scripts/amp_smoke.py` — AMP OFF vs ON comparison test with timing and memory stats
+
+### Remaining Blockers
+- Full 50-epoch baseline run not yet completed (5-epoch evidence run done)
+- No real MedSAM3 checkpoint available for end-to-end teacher coupling test
+- BraTS21 and ACDC datasets not yet validated/scanned for corruption
+
+---
+
 ## 2026-03-26 — Code-Only Sprint: 7 Engineering Upgrades
 
 ### Summary
