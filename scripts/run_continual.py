@@ -21,7 +21,11 @@ Produces:
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
+import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 _REPO_ROOT = str(Path(__file__).resolve().parents[1])
@@ -100,6 +104,46 @@ def main():
     logger.info(f"Method: {cfg.get('method', {}).get('name', 'finetune')}")
     logger.info(f"Device: {cfg['runtime']['device']}")
     logger.info(f"Output: {output_dir}")
+
+    # ---- Save run manifest (config locking) ----
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    resolved_cfg_str = yaml.safe_dump(cfg, sort_keys=True)
+    config_hash = hashlib.sha256(resolved_cfg_str.encode()).hexdigest()[:12]
+
+    try:
+        commit_hash = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=_REPO_ROOT, text=True
+        ).strip()
+    except Exception:
+        commit_hash = "unknown"
+
+    manifest = {
+        "timestamp": datetime.now().isoformat(),
+        "commit_hash": commit_hash,
+        "config_hash": config_hash,
+        "seed": seed,
+        "sequence_name": seq_name,
+        "method": cfg.get("method", {}).get("name", "finetune"),
+        "tasks": [tc.get("id", f"task_{i}") for i, tc in enumerate(task_configs)],
+        "device": cfg["runtime"]["device"],
+        "dry_run": args.dry_run,
+        "args": {
+            "base_config": args.base_config,
+            "task_config": args.task_config,
+            "method_config": args.method_config,
+            "dataset_config": args.dataset_config,
+        },
+    }
+
+    (output_dir / "run_manifest.json").write_text(
+        json.dumps(manifest, indent=2), encoding="utf-8"
+    )
+    (output_dir / "resolved_config.yaml").write_text(resolved_cfg_str, encoding="utf-8")
+
+    logger.info(f"Config hash: {config_hash}")
+    logger.info(f"Commit: {commit_hash}")
+    logger.info(f"Seed: {seed}")
 
     model = build_model(cfg)
     method = create_method(cfg)
