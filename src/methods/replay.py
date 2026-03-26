@@ -55,7 +55,7 @@ class ReplayMethod(ContinualMethod):
         x = batch["image"].to(device)
         y = batch["label"].to(device)
         logits = model(x)
-        loss_cur = F.cross_entropy(logits, y)
+        loss_cur = self._compute_loss(logits, y)
 
         # replay contribution
         replay = self._sample_memory(k=x.shape[0])
@@ -63,7 +63,7 @@ class ReplayMethod(ContinualMethod):
             xr = replay["image"].to(device)
             yr = replay["label"].to(device)
             logits_r = model(xr)
-            loss_rep = F.cross_entropy(logits_r, yr)
+            loss_rep = self._compute_loss(logits_r, yr)
             loss = loss_cur + self.replay_weight * loss_rep
         else:
             loss = loss_cur

@@ -15,6 +15,7 @@ import torch
 
 from src.utils.config import load_yaml, merge_dicts
 from src.utils.logging import setup_logger
+from src.utils.reproducibility import set_seed
 from src.data.registry import create_loaders
 from src.models.factory import build_model
 from src.methods import create_method
@@ -40,10 +41,14 @@ def main():
     if args.print_config:
         print(yaml.safe_dump(cfg, sort_keys=False))
 
+    seed = cfg.get("experiment", {}).get("seed", 42)
+    set_seed(seed)
+
     cfg.setdefault("runtime", {})
     cfg["runtime"]["device"] = "cuda" if torch.cuda.is_available() else "cpu"
 
     logger = setup_logger("train")
+    logger.info(f"seed={seed}")
     train_loader, val_loader = create_loaders(cfg)
     model = build_model(cfg)
     method = create_method(cfg)

@@ -13,6 +13,13 @@ from typing import Any
 
 import yaml
 
+# Ensure repo root is on sys.path so `from src.*` imports work when invoked as a script.
+_REPO_ROOT = str(Path(__file__).resolve().parents[1])
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from src.utils.reproducibility import collect_env_info
+
 
 DEFAULT_METHODS = ["finetune", "replay", "distill", "distill_replay_ewc"]
 DATA_SOURCES_WITH_SPLITS = {"totalseg", "brats21", "acdc"}
@@ -303,6 +310,9 @@ def main() -> None:
         "config_hashes": config_hashes,
         "run_fingerprint": run_fingerprint,
     }
+    run_manifest["environment"] = collect_env_info(
+        {"experiment": {"seed": base_payload.get("experiment", {}).get("seed")}}
+    )
     (run_root / "run_manifest.json").write_text(json.dumps(run_manifest, indent=2), encoding="utf-8")
 
     aggregate_rows: list[dict[str, Any]] = []

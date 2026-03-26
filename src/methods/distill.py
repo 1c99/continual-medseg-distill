@@ -45,7 +45,7 @@ class DistillMethod(ContinualMethod):
         y = batch["label"].to(device)
 
         student_logits = model(x)
-        ce = F.cross_entropy(student_logits, y)
+        ce = self._compute_loss(student_logits, y)
 
         if self.teacher_model is None:
             return ce
@@ -62,7 +62,7 @@ class DistillMethod(ContinualMethod):
 
         return ce + self.kd_weight * kd
 
-    def post_task_update(self, model: torch.nn.Module) -> None:
+    def post_task_update(self, model: torch.nn.Module, **kwargs) -> None:
         self.teacher_model = copy.deepcopy(model).eval()
         for p in self.teacher_model.parameters():
             p.requires_grad = False

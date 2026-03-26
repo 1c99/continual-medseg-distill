@@ -127,5 +127,5 @@ def train(
             logger.info("dry-run enabled; stopping after one epoch")
             break
 
-    method.post_task_update(model)
+    method.post_task_update(model, train_loader=train_loader)
     return model

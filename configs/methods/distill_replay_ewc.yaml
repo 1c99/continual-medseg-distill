@@ -8,4 +8,4 @@ method:
     weight: 1.0
   ewc:
     weight: 0.2
-    # TODO: implement proper EWC diagonal Fisher estimation + accumulation
+    fisher_samples: 64
