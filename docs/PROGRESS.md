@@ -4,6 +4,25 @@ This file is updated alongside repository progress so experiment intent and impl
 
 ---
 
+## 2026-03-26 — Baseline Suite Starter + Runbook
+
+### Summary
+Added a lightweight baseline-suite runner to execute the four core methods sequentially with consistent logging and a single CSV summary.
+
+### What was implemented
+- Added `scripts/run_baseline_suite.py`.
+  - Runs `finetune`, `replay`, `distill`, `distill_replay_ewc` in order.
+  - Supports `--dataset-config` to override dataset settings.
+  - Supports `--dry-run` to forward smoke-mode execution to `scripts/train.py`.
+  - Writes per-method run folders to `outputs/baselines/<timestamp>/<method>/`.
+  - Captures per-method `stdout.log` and `stderr.log`.
+  - Writes run-level `suite_summary.csv` with status, return code, duration, command, and log paths.
+- Updated `docs/experiment_protocol.md` with one canonical baseline-suite command.
+
+### Why this matters
+- Provides a single, reproducible baseline entrypoint for quick experimentation and reporting.
+- Makes failures/debugging easier with isolated method logs and explicit per-method status tracking.
+
 ## 2026-03-25 — Baseline Scaffold + First Runnable Wiring
 
 ### Summary

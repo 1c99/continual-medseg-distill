@@ -58,6 +58,16 @@ python scripts/run_ablations.py \
 
 > `--dataset-config` should point to a dataset YAML that sets `data.source` and `<source>.split_manifest` (for example `totalseg`, `brats21`, or `acdc`).
 
+### Canonical command: baseline suite runner
+
+```bash
+python scripts/run_baseline_suite.py \
+  --base-config configs/base.yaml \
+  --dataset-config configs/datasets/totalseg_example.yaml
+```
+
+Use `--dry-run` for a fast wiring check without full training.
+
 ### Output layout
 
 ```text
