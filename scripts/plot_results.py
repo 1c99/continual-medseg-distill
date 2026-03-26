@@ -175,6 +175,92 @@ def plot_per_task_dice(run_dir: Path, out_dir: Path) -> Path | None:
     return out
 
 
+def plot_bwt_fwt_bars(run_dir: Path, out_dir: Path) -> Path | None:
+    """Bar chart of BWT and FWT from multi_task_summary.json or forgetting.json."""
+    for fname in ["multi_task_summary.json", "forgetting.json"]:
+        fpath = run_dir / fname
+        if fpath.exists():
+            data = json.loads(fpath.read_text(encoding="utf-8"))
+            break
+    else:
+        return None
+
+    bwt = _float(str(data.get("mean_bwt", "")))
+    fwt = _float(str(data.get("mean_fwt", "")))
+    forgetting = _float(str(data.get("mean_forgetting", "")))
+
+    values = {}
+    if bwt is not None:
+        values["BWT"] = bwt
+    if fwt is not None:
+        values["FWT"] = fwt
+    if forgetting is not None:
+        values["Forgetting"] = forgetting
+
+    if not values:
+        return None
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    names = list(values.keys())
+    vals = list(values.values())
+    colors = ["#e74c3c" if v < 0 else "#2ecc71" for v in vals]
+    ax.bar(names, vals, color=colors)
+    ax.axhline(0, color="black", linewidth=0.5)
+    ax.set_ylabel("Score")
+    ax.set_title("Backward/Forward Transfer")
+    for i, v in enumerate(vals):
+        ax.text(i, v + 0.005 * (1 if v >= 0 else -1), f"{v:.4f}", ha="center", fontsize=9)
+    fig.tight_layout()
+    out = out_dir / "bwt_fwt_bars.png"
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+    return out
+
+
+def plot_stability_plasticity(run_dir: Path, out_dir: Path) -> Path | None:
+    """Scatter plot: x=plasticity (FWT), y=stability (1-forgetting).
+
+    Reads from multiple multi_task_summary.json files if found in subdirs.
+    """
+    points = []
+    # Check subdirs (one per method in a multi-method run)
+    for child in sorted(run_dir.iterdir()):
+        summary = child / "multi_task_summary.json" if child.is_dir() else None
+        if summary and summary.exists():
+            data = json.loads(summary.read_text(encoding="utf-8"))
+            fwt = _float(str(data.get("mean_fwt", "")))
+            forg = _float(str(data.get("mean_forgetting", "")))
+            if fwt is not None and forg is not None:
+                points.append((child.name, fwt, 1.0 - forg))
+
+    # Also check run_dir itself
+    root_summary = run_dir / "multi_task_summary.json"
+    if root_summary.exists() and not points:
+        data = json.loads(root_summary.read_text(encoding="utf-8"))
+        fwt = _float(str(data.get("mean_fwt", "")))
+        forg = _float(str(data.get("mean_forgetting", "")))
+        if fwt is not None and forg is not None:
+            points.append(("run", fwt, 1.0 - forg))
+
+    if not points:
+        return None
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+    for name, fwt, stab in points:
+        ax.scatter(fwt, stab, s=80, zorder=5)
+        ax.annotate(name, (fwt, stab), textcoords="offset points", xytext=(5, 5), fontsize=8)
+    ax.set_xlabel("Plasticity (FWT)")
+    ax.set_ylabel("Stability (1 - Forgetting)")
+    ax.set_title("Stability-Plasticity Trade-off")
+    ax.axhline(1.0, color="gray", linestyle="--", linewidth=0.5)
+    ax.axvline(0.0, color="gray", linestyle="--", linewidth=0.5)
+    fig.tight_layout()
+    out = out_dir / "stability_plasticity.png"
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+    return out
+
+
 def main():
     parser = argparse.ArgumentParser(description="Generate result figures")
     parser.add_argument("run_dir", help="Ablation or multi-task run directory")
@@ -190,7 +276,10 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     generated = []
-    for fn in [plot_method_comparison, plot_forgetting_heatmap, plot_per_task_dice]:
+    for fn in [
+        plot_method_comparison, plot_forgetting_heatmap, plot_per_task_dice,
+        plot_bwt_fwt_bars, plot_stability_plasticity,
+    ]:
         result = fn(run_dir, out_dir)
         if result:
             generated.append(str(result))
