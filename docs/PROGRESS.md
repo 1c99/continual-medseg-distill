@@ -4,6 +4,79 @@ This file is updated alongside repository progress so experiment intent and impl
 
 ---
 
+## 2026-03-26 — Phase-Next: Architecture + Reproducibility Sprint
+
+### Summary
+Code-quality sprint while GPU compute is blocked. Standardized teacher interface, data pipeline hardening, early stopping, BWT/FWT metrics, config hashing, and 34 new tests. 103 total tests pass.
+
+### What was implemented
+
+**P0-1: Teacher Adapter**
+- `forward_logits(x)` and `forward_features(x)` standardized interface
+- `metadata` property: model_id, ckpt_hash (SHA256 of first 4KB), source_mode, frozen status
+- Checkpoint hash for lineage tracking across runs
+
+**P0-2: Data Pipeline Hardening**
+- `src/data/label_remap.py`: configurable `LabelRemapper` with strict mode and domain verification
+- `validate_subject()` classmethods on TotalSeg, BraTS21, ACDC adapters for fast schema checks
+- `remap_from_config()` for config-driven label remapping
+
+**P0-3: Experiment Reliability**
+- `EarlyStopper` in trainer: configurable patience/metric/mode, logged when triggered
+- `worker_init_fn()` for deterministic multi-worker DataLoader seeding
+- `set_deterministic_mode()` for full reproducibility
+- Resume lineage: `resume_count` tracked in `task_progress.json`
+- `worker_init_fn` wired into all DataLoader construction via registry.py
+
+**P1-4: Metrics + Analysis**
+- BWT (Backward Transfer) and FWT (Forward Transfer) computed alongside forgetting
+- `scripts/plot_results.py`: method comparison bars, forgetting heatmap, per-task dice curves
+- Graceful fallback if matplotlib not installed
+
+**P1-5: Config Quality**
+- `compute_config_hash()`: deterministic SHA256 of config for reproducibility
+- `save_resolved_config()`: writes resolved YAML + hash to run artifacts
+- `validate_paths()`: checks data root and teacher checkpoint existence on disk
+
+**P1-6: Test Expansion (34 new tests)**
+- Teacher: forward_logits, forward_features, metadata, checkpoint hash (6)
+- Data: LabelRemapper basic/torch/strict/domain, validate_subject per dataset (9)
+- Reliability: EarlyStopper (3), worker seeding (1), deterministic mode (1), resume lineage (1)
+- Metrics: BWT/FWT correctness, sign conventions (3)
+- Config: hash determinism, path checks, resolved config round-trip (5)
+- Integration: per-method 1-epoch tests (4), 4-method × 2-task smoke matrix (1)
+
+### Test summary (103/103 pass)
+
+| Test suite | Tests | Status |
+|-----------|-------|--------|
+| test_phase_next.py | 34 | PASS |
+| test_teacher_and_kd.py | 26 | PASS |
+| test_multi_task.py | 13 | PASS |
+| test_metrics_edge_cases.py | 12 | PASS |
+| test_fisher_ewc.py | 8 | PASS |
+| test_dicece_loss.py | 5 | PASS |
+| test_reproducibility.py | 5 | PASS |
+
+### Files changed (12 files, 1156 insertions)
+
+| File | Change |
+|------|--------|
+| `src/methods/teacher.py` | forward_logits/features, metadata, ckpt hash |
+| `src/data/label_remap.py` | NEW — LabelRemapper utility |
+| `src/data/totalseg.py` | validate_subject() |
+| `src/data/brats21.py` | validate_subject() |
+| `src/data/acdc.py` | validate_subject() |
+| `src/data/registry.py` | worker_init_fn wiring |
+| `src/engine/trainer.py` | EarlyStopper |
+| `src/engine/multi_task_trainer.py` | BWT/FWT, resume_count |
+| `src/utils/reproducibility.py` | worker_init_fn, set_deterministic_mode |
+| `src/utils/config_validation.py` | config hash, path checks, save_resolved_config |
+| `scripts/plot_results.py` | NEW — figure generation |
+| `tests/test_phase_next.py` | NEW — 34 tests |
+
+---
+
 ## 2026-03-26 — Phase-4: Teacher Abstraction, Multi-Mode KD, Resumable Engine, Config Validation
 
 ### Summary
@@ -516,8 +589,14 @@ Implemented the continual learning execution backbone: multi-task sequential tra
 - [x] `v1.5`: Multi-mode KD (logit/feature/weighted/boundary), all config-toggleable
 - [x] `v1.6`: Resumable multi-task engine with task progress persistence
 - [x] `v1.7`: Strict config validation with actionable errors
-- [ ] `v1.8`: Real-data TotalSeg training run (pending GPU/CUDA driver)
-- [ ] `v1.9`: Multi-task ablation runner (all 4 methods × task sequence)
+- [x] `v1.8`: Teacher adapter (forward_logits/features, metadata, ckpt hash)
+- [x] `v1.9`: Data pipeline hardening (LabelRemapper, validate_subject)
+- [x] `v2.0`: Early stopping, deterministic worker seeding, resume lineage
+- [x] `v2.1`: BWT/FWT metrics, plot_results.py
+- [x] `v2.2`: Config hash, resolved config persistence, path validation
+- [x] `v2.3`: 103 tests total (34 new: integration + smoke matrix)
+- [ ] `v2.4`: Real-data TotalSeg training run (pending GPU/CUDA driver)
+- [ ] `v2.5`: Multi-task ablation runner (all 4 methods × task sequence)
 
 ---
 
