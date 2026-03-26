@@ -44,7 +44,13 @@ python scripts/doctor.py --dataset-root /media/user/data2/data2/data
 
 ## Setup
 
-### Option A: editable install
+### Option A: one-shot bootstrap
+
+```bash
+bash scripts/bootstrap_env.sh
+```
+
+### Option B: editable install
 
 ```bash
 cd continual-medseg-distill
