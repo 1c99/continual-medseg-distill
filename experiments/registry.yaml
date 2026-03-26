@@ -1,0 +1,64 @@
+# Experiment Registry — source of truth for planned and completed runs.
+# Statuses: pending | running | done | failed
+# Update via: python scripts/experiment_status.py --update <id> <status>
+
+experiments:
+  - id: synth_ablation_baseline
+    description: "4-method synthetic ablation (finetune/replay/distill/distill_replay_ewc)"
+    config_ref: configs/base.yaml
+    method_configs:
+      - configs/methods/finetune.yaml
+      - configs/methods/replay.yaml
+      - configs/methods/distill.yaml
+      - configs/methods/distill_replay_ewc.yaml
+    status: done
+    expected_outputs:
+      - outputs/ablations/*/aggregate_metrics.csv
+      - outputs/ablations/*/summary.json
+    notes: "Verified on synthetic data, all 4 methods pass."
+
+  - id: totalseg_smoke_validation
+    description: "TotalSegmentator smoke data validation (25 subjects)"
+    config_ref: configs/datasets/totalseg_workstation.yaml
+    status: done
+    expected_outputs:
+      - outputs/reports/totalseg_smoke_report.md
+    notes: "25/25 subjects found, 5 loaded, shapes and labels correct."
+
+  - id: brats21_smoke_validation
+    description: "BraTS21 smoke data validation (25 subjects, flat layout)"
+    config_ref: configs/datasets/brats21_workstation.yaml
+    status: done
+    expected_outputs:
+      - outputs/reports/brats21_smoke_report.md
+    notes: "25/25 subjects found, 5 loaded, 4-channel, labels {0,1,2,3}."
+
+  - id: totalseg_liver_baseline
+    description: "TotalSegmentator liver segmentation baseline (100 train / 20 val)"
+    config_ref: configs/datasets/totalseg_train.yaml
+    method_configs:
+      - configs/methods/finetune.yaml
+    status: pending
+    expected_outputs:
+      - outputs/totalseg_baseline/metrics.csv
+      - outputs/totalseg_baseline/checkpoints/best.pt
+    notes: "First real-data run. Requires GPU."
+
+  - id: brats21_baseline
+    description: "BraTS21 4-class segmentation baseline (100 train / 20 val)"
+    config_ref: configs/datasets/brats21_train.yaml
+    method_configs:
+      - configs/methods/finetune.yaml
+    status: pending
+    expected_outputs:
+      - outputs/brats21_baseline/metrics.csv
+    notes: "Requires GPU. Flat layout adapter verified."
+
+  - id: multitask_totalseg_brats21
+    description: "2-task continual sequence: TotalSeg → BraTS21, all 4 methods"
+    config_ref: configs/base.yaml
+    status: pending
+    expected_outputs:
+      - outputs/multitask/task_eval_matrix.csv
+      - outputs/multitask/forgetting.json
+    notes: "Core experiment for paper. Requires both datasets + GPU."
