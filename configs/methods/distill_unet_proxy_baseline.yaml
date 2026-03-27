@@ -1,0 +1,19 @@
+# KD Baseline with UNet proxy teacher (stand-in for MedSAM3)
+#
+# This config validates the full distillation pipeline end-to-end
+# using a UNet checkpoint as a proxy teacher, since no MedSAM3/SAM3
+# checkpoints are currently available.
+#
+# Once a real external teacher checkpoint is available, switch to
+# distill_medsam3_baseline.yaml with type: medsam3.
+
+method:
+  name: distill
+  kd:
+    mode: logit
+    weight: 0.7
+    temperature: 2.0
+    teacher:
+      type: checkpoint
+      ckpt_path: outputs/smoke_AB_real/taskA_organs/checkpoints/best.pt
+      model_id: unet_proxy_teacher

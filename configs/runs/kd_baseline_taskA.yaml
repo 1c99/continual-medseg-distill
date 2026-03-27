@@ -1,0 +1,55 @@
+# KD Baseline on Task A (5 organs) with UNet proxy teacher
+# This validates the full distillation pipeline end-to-end.
+# No MedSAM3/SAM3 checkpoint available; using UNet checkpoint as proxy.
+
+experiment:
+  name: kd_baseline_taskA
+  seed: 42
+
+runtime:
+  device: auto
+
+model:
+  name: monai_unet
+  in_channels: 1
+  out_channels: 6
+  channels: [16, 32, 64, 128]
+  strides: [2, 2, 2]
+  num_res_units: 2
+
+method:
+  name: distill
+  kd:
+    mode: logit
+    weight: 0.7
+    temperature: 2.0
+    teacher:
+      type: checkpoint
+      ckpt_path: outputs/smoke_AB_real/taskA_organs/checkpoints/best.pt
+      model_id: unet_proxy_teacher
+
+data:
+  source: totalseg
+  batch_size: 2
+  val_batch_size: 2
+  totalseg:
+    root: /media/user/data2/data2/data/Totalsegmentator_dataset
+    organs:
+      - liver
+      - spleen
+      - kidney_left
+      - kidney_right
+      - pancreas
+    shape: [64, 64, 64]
+    split_manifest: data/splits/totalseg_train_clean_v1.json
+
+train:
+  epochs: 2
+  lr: 0.001
+  max_steps_per_epoch: 10
+  loss_type: dicece
+
+output:
+  dir: outputs/kd_baseline_taskA
+  best_metric: voxel_acc
+  best_mode: max

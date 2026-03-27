@@ -1,0 +1,16 @@
+# TotalSegmentator data config (no model overrides)
+# Use with task configs that define their own model.out_channels
+data:
+  source: totalseg
+  batch_size: 2
+  val_batch_size: 2
+  totalseg:
+    root: /media/user/data2/data2/data/Totalsegmentator_dataset
+    organ: liver
+    shape: [128, 128, 128]
+    split_manifest: data/splits/totalseg_train_clean_v1.json
+
+train:
+  epochs: 5
+  lr: 0.001
+  loss_type: dicece

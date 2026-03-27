@@ -59,7 +59,7 @@ class DistillMethod(ContinualMethod):
         if self.kd_mode == "feature" and "use_features" not in teacher_cfg:
             teacher_cfg = {**teacher_cfg, "use_features": True}
 
-        self.teacher = Teacher(teacher_cfg=teacher_cfg)
+        self.teacher = Teacher(teacher_cfg=teacher_cfg, global_cfg=cfg)
 
         # Teacher cache
         cache_cfg = kd_cfg.get("cache", {})
@@ -304,7 +304,8 @@ class DistillMethod(ContinualMethod):
                 f"total={stats['total']}"
             )
             self._cache.invalidate()  # Teacher changed, cache invalid
-        self.teacher.snapshot(model)
+        if not self.teacher.is_external:
+            self.teacher.snapshot(model)
 
     def save_state(self, path: Path, model_template: nn.Module | None = None) -> None:
         path = Path(path)

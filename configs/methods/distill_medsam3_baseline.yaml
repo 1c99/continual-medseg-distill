@@ -4,10 +4,8 @@
 #   Student + MedSAM3 KD on Task A (organs), then finetune on Task B (muscles)
 #
 # Requirements:
+#   - MedSAM3 cloned: bash scripts/setup_external.sh --medsam3
 #   - MedSAM3 teacher checkpoint at the path below
-#   - Checkpoint must contain either:
-#     {"model_state_dict": ...} or a raw state_dict
-#   - Architecture must match student (monai_unet with same channels/strides)
 #
 # Smoke test:
 #   python scripts/run_continual.py \
@@ -25,8 +23,7 @@
 #
 # Error behavior:
 #   - Missing checkpoint → FileNotFoundError with actionable message
-#   - Architecture mismatch → RuntimeError from state_dict load
-#   - Missing model_template → ValueError (teacher needs architecture ref)
+#   - Missing third_party/medsam3 → RuntimeError with setup instructions
 
 method:
   name: distill
@@ -35,9 +32,9 @@ method:
     weight: 0.7
     temperature: 2.0
     cache:
-      enabled: true
-      dir: outputs/.teacher_cache
+      enabled: false
     teacher:
-      type: checkpoint
+      type: medsam3
       ckpt_path: checkpoints/medsam3_teacher.pt   # UPDATE to actual path
       model_id: medsam3_baseline
+      output_channels: 14                          # must match student out_channels

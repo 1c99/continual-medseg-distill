@@ -4,6 +4,53 @@ This file is updated alongside repository progress so experiment intent and impl
 
 ---
 
+## 2026-03-27 — Phase-Teacher Integration: Backend Abstraction + External Teacher Support
+
+### Summary
+
+Introduced a pluggable teacher backend abstraction so the `Teacher` class can delegate to different model architectures (UNet, SAM3, MedSAM3) without changing the public API. This unblocks external teacher experiments.
+
+### What was implemented
+
+**Teacher Backend Abstraction (validated):**
+- `src/methods/teacher_backends/base.py` — `TeacherBackend` ABC defining the interface: `load()`, `forward_logits()`, `forward_features()`, `metadata`, `to()`, `state_dict()`, `eval()`, `snapshot()`, `has_model`, `is_external`
+- `src/methods/teacher_backends/unet.py` — `UNetBackend` extracted from original `Teacher` class. Supports snapshot and checkpoint modes. Full backward compatibility preserved.
+- `src/methods/teacher_backends/__init__.py` — `create_backend(cfg)` factory dispatching on `teacher.type`
+- `src/methods/teacher.py` — Refactored to delegate all operations to backend. Added `is_external` property. Public API unchanged.
+- `src/utils/config_validation.py` — Extended valid teacher types: `{snapshot, checkpoint, sam3, medsam3}`. Added `output_channels` requirement for sam3/medsam3.
+
+**External Teacher Types (pending implementation):**
+- SAM3 backend (`type: sam3`) — registered in factory and config validation, implementation in progress
+- MedSAM3 backend (`type: medsam3`) — registered in factory and config validation, pending SAM3 completion
+- LoRA/PEFT wrapper — planned, off by default
+
+**Snapshot Guard for External Teachers (pending):**
+- `distill.py` and `distill_replay_ewc.py` `post_task_update()` currently call `self.teacher.snapshot(model)` unconditionally
+- Guard pattern: `if not self.teacher.is_external: self.teacher.snapshot(model)` — to be added when external backends are wired
+
+### Validation evidence
+
+- All 10 new backend tests pass (`tests/test_teacher_backends.py`)
+- All pre-existing teacher/KD tests pass (Teacher API backward compatible)
+- Config validation accepts sam3/medsam3 types with required fields, rejects invalid types
+- External backends correctly raise `NotImplementedError` on `snapshot()`
+
+### Validated vs Pending
+
+| Component | Status |
+|-----------|--------|
+| TeacherBackend ABC | Validated (tests pass) |
+| UNetBackend (snapshot + checkpoint) | Validated (tests pass) |
+| Teacher delegation to backend | Validated (backward compat confirmed) |
+| Config validation for sam3/medsam3 | Validated (tests pass) |
+| SAM3 backend implementation | Pending (in progress) |
+| MedSAM3 backend implementation | Pending |
+| `is_external` snapshot guard in distill | Pending |
+| LoRA/PEFT integration | Pending |
+| KD baseline with external teacher | Pending (blocked by checkpoint) |
+
+---
+
 ## 2026-03-27 — Phase-Next Alignment: MedSAM3 Baseline + Task A/B Definition
 
 ### What was aligned

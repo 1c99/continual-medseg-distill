@@ -14,14 +14,13 @@ Standardized interface:
 """
 from __future__ import annotations
 
-import copy
-import hashlib
 import logging
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import torch
 import torch.nn as nn
+
+from .teacher_backends import UNetBackend, create_backend
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +29,12 @@ class Teacher:
     """Frozen teacher wrapper with optional feature extraction.
 
     Config keys (under ``method.kd.teacher``):
-        type: snapshot | checkpoint  (default: snapshot)
-        ckpt_path: path to .pt file (required when type=checkpoint)
+        type: snapshot | checkpoint | sam3 | medsam3  (default: snapshot)
+        ckpt_path: path to .pt file (required when type=checkpoint/sam3/medsam3)
         model_id: str  (optional, for provenance tracking)
         use_features: bool  (default: false)
         feature_layers: list of layer name prefixes to capture
+        output_channels: int  (required for sam3/medsam3)
     """
 
     def __init__(
@@ -43,18 +43,13 @@ class Teacher:
         *,
         teacher_cfg: Dict[str, Any] | None = None,
         model_template: nn.Module | None = None,
+        global_cfg: Dict[str, Any] | None = None,
     ):
         self._cfg = teacher_cfg or {}
-        self._model: nn.Module | None = None
-        self._feature_hooks: List[torch.utils.hooks.RemovableHook] = []
-        self._features: Dict[str, torch.Tensor] = {}
-        self._use_features = bool(self._cfg.get("use_features", False))
-        self._feature_layers: List[str] = list(self._cfg.get("feature_layers", []))
-        self._ckpt_hash: str | None = None
-        self._source_mode: str = "none"  # none | snapshot | checkpoint
-        self._model_id: str = self._cfg.get("model_id", "")
-
         teacher_type = self._cfg.get("type", "snapshot")
+
+        # Create the appropriate backend
+        self._backend = create_backend(self._cfg)
 
         if teacher_type == "checkpoint":
             ckpt_path = self._cfg.get("ckpt_path")
@@ -62,119 +57,62 @@ class Teacher:
                 raise ValueError(
                     "method.kd.teacher.ckpt_path is required when teacher.type=checkpoint"
                 )
-            self._load_from_checkpoint(ckpt_path, model_template)
+            # Build model_template from global config if not provided
+            if model_template is None and global_cfg is not None:
+                from src.models.factory import build_model
+                model_template = build_model(global_cfg)
+            assert isinstance(self._backend, UNetBackend)
+            self._backend.load_from_checkpoint(ckpt_path, model_template)
+        elif teacher_type in {"sam3", "medsam3"}:
+            # External backends handle their own loading in load()
+            pass
         elif model is not None:
             self.snapshot(model)
 
     @property
     def model(self) -> nn.Module | None:
-        return self._model
+        if isinstance(self._backend, UNetBackend):
+            return self._backend.model
+        return None
 
     @property
     def has_model(self) -> bool:
-        return self._model is not None
+        return self._backend.has_model
+
+    @property
+    def is_external(self) -> bool:
+        """True for external (non-UNet) backends like SAM3/MedSAM3."""
+        return self._backend.is_external
 
     @property
     def features(self) -> Dict[str, torch.Tensor]:
         """Captured intermediate features from last forward pass."""
-        return self._features
+        if isinstance(self._backend, UNetBackend):
+            return self._backend.features
+        return {}
+
+    @property
+    def _feature_layers(self) -> list:
+        """Expose backend feature_layers for backward compat with distill.py."""
+        if isinstance(self._backend, UNetBackend):
+            return self._backend._feature_layers
+        return []
+
+    @property
+    def _use_features(self) -> bool:
+        """Expose backend use_features for backward compat with distill.py."""
+        if isinstance(self._backend, UNetBackend):
+            return self._backend._use_features
+        return False
 
     @property
     def metadata(self) -> Dict[str, Any]:
         """Teacher provenance metadata for reproducibility tracking."""
-        return {
-            "model_id": self._model_id or type(self._model).__name__ if self._model else "",
-            "ckpt_hash": self._ckpt_hash,
-            "source_mode": self._source_mode,
-            "frozen": self.has_model and all(
-                not p.requires_grad for p in self._model.parameters()
-            ) if self.has_model else False,
-            "use_features": self._use_features,
-            "feature_layers": self._feature_layers,
-        }
+        return self._backend.metadata
 
     def snapshot(self, model: nn.Module) -> None:
         """Deepcopy *model* as the frozen teacher."""
-        self._remove_hooks()
-        self._model = copy.deepcopy(model).eval()
-        for p in self._model.parameters():
-            p.requires_grad = False
-        self._source_mode = "snapshot"
-        self._ckpt_hash = None
-        if self._use_features:
-            self._register_hooks()
-        logger.debug("Teacher: snapshot created")
-
-    @staticmethod
-    def _compute_ckpt_hash(path: Path, nbytes: int = 4096) -> str:
-        """SHA256 of first *nbytes* of checkpoint file for lineage tracking."""
-        h = hashlib.sha256()
-        with open(path, "rb") as f:
-            h.update(f.read(nbytes))
-        return h.hexdigest()[:16]
-
-    def _load_from_checkpoint(
-        self, ckpt_path: str, model_template: nn.Module | None
-    ) -> None:
-        path = Path(ckpt_path)
-        if not path.exists():
-            raise FileNotFoundError(
-                f"Teacher checkpoint not found: {path}. "
-                "Provide a valid method.kd.teacher.ckpt_path."
-            )
-        if model_template is None:
-            raise ValueError(
-                "model_template is required to load teacher from checkpoint"
-            )
-        self._ckpt_hash = self._compute_ckpt_hash(path)
-        state = torch.load(path, map_location="cpu", weights_only=False)
-        sd = state.get("model_state_dict", state)
-        self._model = copy.deepcopy(model_template)
-        self._model.load_state_dict(sd)
-        self._model.eval()
-        for p in self._model.parameters():
-            p.requires_grad = False
-        self._source_mode = "checkpoint"
-        if self._use_features:
-            self._register_hooks()
-        logger.info(f"Teacher: loaded from checkpoint {path} (hash={self._ckpt_hash})")
-
-    # ---- feature hooks ----
-
-    def _register_hooks(self) -> None:
-        if self._model is None:
-            return
-        self._remove_hooks()
-        self._features = {}
-
-        for name, module in self._model.named_modules():
-            if self._should_hook(name):
-                hook = module.register_forward_hook(self._make_hook(name))
-                self._feature_hooks.append(hook)
-
-        if not self._feature_hooks:
-            logger.warning(
-                "Teacher: use_features=True but no layers matched feature_layers=%s. "
-                "Available layers: %s",
-                self._feature_layers,
-                [n for n, _ in self._model.named_modules() if n][:20],
-            )
-
-    def _should_hook(self, layer_name: str) -> bool:
-        if not self._feature_layers:
-            return False
-        return any(layer_name.startswith(prefix) for prefix in self._feature_layers)
-
-    def _make_hook(self, name: str):
-        def hook_fn(module, input, output):
-            self._features[name] = output.detach()
-        return hook_fn
-
-    def _remove_hooks(self) -> None:
-        for h in self._feature_hooks:
-            h.remove()
-        self._feature_hooks.clear()
-        self._features.clear()
+        self._backend.snapshot(model)
 
     # ---- forward ----
 
@@ -185,9 +123,7 @@ class Teacher:
         If ``use_features=True``, captured features are available via
         ``self.features`` after this call.
         """
-        if self._model is None:
-            raise RuntimeError("Teacher model is not initialised; call snapshot() first")
-        return self._model(x)
+        return self._backend.forward_logits(x)
 
     def forward_logits(self, x: torch.Tensor) -> torch.Tensor:
         """Standardized interface: return output logits."""
@@ -199,12 +135,7 @@ class Teacher:
         Requires ``use_features=True`` and ``feature_layers`` to be set.
         Returns dict mapping layer names to their output tensors.
         """
-        if not self._use_features:
-            raise RuntimeError(
-                "forward_features() requires use_features=True in teacher config"
-            )
-        _ = self.forward(x)
-        return dict(self._features)
+        return self._backend.forward_features(x)
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
         return self.forward(x)
@@ -212,28 +143,14 @@ class Teacher:
     # ---- state persistence ----
 
     def state_dict(self) -> Dict[str, Any]:
-        state: Dict[str, Any] = {}
-        if self._model is not None:
-            state["teacher_state_dict"] = self._model.state_dict()
-        state["teacher_metadata"] = self.metadata
-        return state
+        return self._backend.state_dict()
 
     def load_state_dict(
         self, state: Dict[str, Any], model_template: nn.Module | None = None
     ) -> None:
-        if "teacher_state_dict" not in state:
-            return
-        if model_template is None:
-            raise ValueError("model_template required to restore teacher state")
-        self._remove_hooks()
-        self._model = copy.deepcopy(model_template).eval()
-        self._model.load_state_dict(state["teacher_state_dict"])
-        for p in self._model.parameters():
-            p.requires_grad = False
-        if self._use_features:
-            self._register_hooks()
+        if isinstance(self._backend, UNetBackend):
+            self._backend.load_state_dict_from_saved(state, model_template)
 
     def to(self, device) -> "Teacher":
-        if self._model is not None:
-            self._model.to(device)
+        self._backend.to(device)
         return self

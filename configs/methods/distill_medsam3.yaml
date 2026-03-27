@@ -1,15 +1,13 @@
-# Distillation with MedSAM3-like teacher checkpoint
+# Distillation with MedSAM3 teacher
 # Usage: --method-config configs/methods/distill_medsam3.yaml
 #
-# The teacher checkpoint should be a .pt file containing either:
-#   - {"model_state_dict": ...}  (standard format)
-#   - raw state_dict             (fallback)
+# Requires:
+#   - MedSAM3 cloned: bash scripts/setup_external.sh --medsam3
+#   - MedSAM3 checkpoint at ckpt_path below
 #
-# The model architecture must match model.{in_channels, out_channels, channels, strides}
-# since the teacher is loaded into the same UNet architecture.
-#
-# For a real MedSAM3 teacher with different architecture, implement a
-# custom model in src/models/factory.py and set model.name accordingly.
+# The MedSAM3 backend extracts visual features slice-by-slice from 3D
+# volumes and projects them to dense segmentation logits via a lightweight
+# adapter. MedSAM3 is SAM3 fine-tuned for medical segmentation.
 
 method:
   name: distill
@@ -18,11 +16,11 @@ method:
     weight: 0.7
     temperature: 2.0
     cache:
-      enabled: true
-      dir: outputs/.teacher_cache
+      enabled: false
     teacher:
-      type: checkpoint
+      type: medsam3
       ckpt_path: checkpoints/medsam3_teacher.pt   # UPDATE to actual path
       model_id: medsam3_pretrained
-      # use_features: true                        # uncomment for feature KD
-      # feature_layers: ["model.1", "model.2"]    # layer prefixes to hook
+      output_channels: 14                          # must match student out_channels
+      adapter_channels: 256                        # backbone feature dim
+      # lora_path: checkpoints/medsam3_lora.pt    # optional separate LoRA weights

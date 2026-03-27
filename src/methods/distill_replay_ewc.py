@@ -36,7 +36,7 @@ class DistillReplayEWCMethod(ReplayMethod):
         self.fisher_samples = int(ewc_cfg.get("fisher_samples", 64))
 
         teacher_cfg = kd_cfg.get("teacher", {})
-        self.teacher = Teacher(teacher_cfg=teacher_cfg)
+        self.teacher = Teacher(teacher_cfg=teacher_cfg, global_cfg=cfg)
 
         self.prev_params: Dict[str, torch.Tensor] = {}
         self.fisher: Dict[str, torch.Tensor] = {}
@@ -138,8 +138,9 @@ class DistillReplayEWCMethod(ReplayMethod):
         return base_loss + self.kd_weight * kd + self.ewc_weight * ewc
 
     def post_task_update(self, model: nn.Module, **kwargs) -> None:
-        # Teacher snapshot
-        self.teacher.snapshot(model)
+        # Teacher snapshot (skip for external teachers like SAM3/MedSAM3)
+        if not self.teacher.is_external:
+            self.teacher.snapshot(model)
         # Fisher estimation
         train_loader = kwargs.get("train_loader")
         device = next(model.parameters()).device

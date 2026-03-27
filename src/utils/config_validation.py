@@ -122,15 +122,44 @@ def _validate_method(cfg: Dict) -> List[str]:
 
         teacher_cfg = kd_cfg.get("teacher", {})
         teacher_type = teacher_cfg.get("type", "snapshot")
-        if teacher_type not in {"snapshot", "checkpoint"}:
+        if teacher_type not in {"snapshot", "checkpoint", "sam3", "medsam3"}:
             errors.append(
                 f"method.kd.teacher.type='{teacher_type}' invalid. "
-                "Use 'snapshot' or 'checkpoint'."
+                "Use 'snapshot', 'checkpoint', 'sam3', or 'medsam3'."
             )
         if teacher_type == "checkpoint" and not teacher_cfg.get("ckpt_path"):
             errors.append(
                 "method.kd.teacher.ckpt_path is required when teacher.type=checkpoint"
             )
+        if teacher_type in {"sam3", "medsam3"}:
+            if not teacher_cfg.get("ckpt_path"):
+                errors.append(
+                    f"method.kd.teacher.ckpt_path is required when teacher.type={teacher_type}"
+                )
+            if not teacher_cfg.get("output_channels"):
+                errors.append(
+                    f"method.kd.teacher.output_channels is required when teacher.type={teacher_type}"
+                )
+
+        # PEFT/LoRA validation
+        peft_cfg = teacher_cfg.get("peft", {})
+        if peft_cfg.get("enabled", False):
+            peft_type = peft_cfg.get("type", "lora")
+            if peft_type != "lora":
+                errors.append(
+                    f"method.kd.teacher.peft.type='{peft_type}' is not supported. "
+                    "Currently only 'lora' is supported."
+                )
+            rank = peft_cfg.get("rank", 8)
+            if isinstance(rank, int) and rank < 1:
+                errors.append(
+                    f"method.kd.teacher.peft.rank={rank} must be >= 1"
+                )
+            alpha = peft_cfg.get("alpha", 16)
+            if isinstance(alpha, int) and alpha < 1:
+                errors.append(
+                    f"method.kd.teacher.peft.alpha={alpha} must be >= 1"
+                )
 
         if mode == "feature":
             if not teacher_cfg.get("feature_layers"):

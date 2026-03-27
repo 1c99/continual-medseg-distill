@@ -1,0 +1,24 @@
+# Distillation with SAM3 teacher
+# Usage: --method-config configs/methods/distill_sam3.yaml
+#
+# Requires:
+#   - SAM3 cloned: bash scripts/setup_external.sh --sam3
+#   - SAM3 checkpoint at ckpt_path below
+#
+# The SAM3 backend extracts visual features slice-by-slice from 3D volumes
+# and projects them to dense segmentation logits via a lightweight adapter.
+
+method:
+  name: distill
+  kd:
+    mode: logit
+    weight: 0.7
+    temperature: 2.0
+    cache:
+      enabled: false
+    teacher:
+      type: sam3
+      ckpt_path: checkpoints/sam3.pt              # UPDATE to actual path
+      model_id: sam3_teacher
+      output_channels: 14                          # must match student out_channels
+      adapter_channels: 256                        # SAM3 backbone feature dim

@@ -51,7 +51,7 @@ Four experimental conditions, each evaluated with the A→B continual sequence:
 | # | Condition | Method Config | Description |
 |---|-----------|---------------|-------------|
 | 1 | Student finetune (no KD) | `finetune.yaml` | Lower bound: naive sequential training |
-| 2 | Student + MedSAM3 KD (Task A only) | `distill_medsam3_baseline.yaml` | Distillation on first task, then finetune on B |
+| 2 | Student + MedSAM3 KD (Task A only) | `distill_medsam3_baseline.yaml` | Distillation on first task via `type: medsam3` backend, then finetune on B |
 | 3 | Student continual A→B (no KD) | `replay.yaml` | Replay buffer only, no teacher |
 | 4 | Student continual A→B with KD+replay+EWC | `distill_replay_ewc.yaml` | Full method: distillation + replay + EWC |
 
@@ -60,9 +60,11 @@ Four experimental conditions, each evaluated with the A→B continual sequence:
 - **Student:** MONAI 3D U-Net (`monai_unet`)
   - Channels: [16, 32, 64, 128], Strides: [2, 2, 2], 2 residual units
   - Input: 1 channel (CT), Output: 6 channels (BG + 5 classes)
-- **Teacher (MedSAM3):** Loaded from checkpoint, same architecture
+- **Teacher (MedSAM3):** Loaded via `type: medsam3` teacher backend
   - Config: `configs/methods/distill_medsam3_baseline.yaml`
-  - Teacher is frozen during training
+  - Uses teacher backend abstraction (`src/methods/teacher_backends/`)
+  - Teacher is frozen during training; output adapted to match student spatial dims
+  - Requires checkpoint: `method.kd.teacher.ckpt_path` and `output_channels`
 
 ### Training Protocol
 

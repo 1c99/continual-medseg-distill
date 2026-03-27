@@ -1,0 +1,267 @@
+"""MedSAM3 teacher backend for knowledge distillation.
+
+Wraps the MedSAM3 model (SAM3 fine-tuned for medical segmentation) to
+produce dense segmentation logits compatible with the
+``(B, num_classes, D, H, W)`` format expected by the distillation pipeline.
+
+MedSAM3 uses the same SAM3 base architecture but may include LoRA
+fine-tuning weights for medical imaging tasks. It typically produces
+denser, more medically-relevant outputs than base SAM3.
+
+Requires:
+- ``third_party/medsam3/`` to be cloned (see ``scripts/setup_external.sh``)
+- A MedSAM3 checkpoint file
+"""
+from __future__ import annotations
+
+import hashlib
+import logging
+import sys
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+from .base import TeacherBackend
+
+logger = logging.getLogger(__name__)
+
+# Path to the vendored MedSAM3 repository
+_MEDSAM3_ROOT = Path(__file__).resolve().parents[3] / "third_party" / "medsam3"
+
+
+class _OutputAdapter(nn.Module):
+    """Projects MedSAM3 backbone features to dense segmentation logits.
+
+    Identical to the SAM3 adapter — shared architecture since MedSAM3
+    uses the same backbone. Kept separate for independent evolution.
+    """
+
+    def __init__(self, in_channels: int = 256, out_channels: int = 14):
+        super().__init__()
+        self.proj = nn.Sequential(
+            nn.Conv3d(in_channels, in_channels, kernel_size=3, padding=1),
+            nn.GroupNorm(16, in_channels),
+            nn.GELU(),
+            nn.Conv3d(in_channels, out_channels, kernel_size=1),
+        )
+
+    def forward(self, features: torch.Tensor, target_shape: tuple) -> torch.Tensor:
+        out = self.proj(features)
+        if out.shape[2:] != target_shape:
+            out = F.interpolate(out, size=target_shape, mode="trilinear", align_corners=False)
+        return out
+
+
+class MedSAM3Backend(TeacherBackend):
+    """Teacher backend that wraps a MedSAM3 model.
+
+    MedSAM3 is SAM3 fine-tuned for medical segmentation, potentially
+    with LoRA adapters. The backend handles both:
+    - Full checkpoint (all weights saved)
+    - Base SAM3 + LoRA weights (loaded separately)
+
+    Config keys (under ``method.kd.teacher``):
+        type: medsam3
+        ckpt_path: path to MedSAM3 checkpoint
+        output_channels: int — number of output classes (must match student)
+        model_id: str — provenance tag (optional)
+        lora_path: str — optional path to LoRA weights (if separate from ckpt)
+        adapter_channels: int — hidden dim for output adapter (default: 256)
+    """
+
+    def __init__(self) -> None:
+        self._model: nn.Module | None = None
+        self._adapter: _OutputAdapter | None = None
+        self._cfg: Dict[str, Any] = {}
+        self._ckpt_hash: str | None = None
+        self._model_id: str = ""
+        self._device: str = "cpu"
+
+    def load(self, cfg: Dict[str, Any], device: str = "cpu") -> None:
+        self._cfg = cfg
+        self._model_id = cfg.get("model_id", "medsam3")
+        self._device = device
+
+        ckpt_path = cfg.get("ckpt_path")
+        output_channels = cfg.get("output_channels")
+
+        if ckpt_path:
+            self._ensure_medsam3_available()
+            self._load_model(ckpt_path, output_channels or 14, device)
+
+    def _ensure_medsam3_available(self) -> None:
+        if not _MEDSAM3_ROOT.exists():
+            raise RuntimeError(
+                f"MedSAM3 repository not found at {_MEDSAM3_ROOT}. "
+                "Run: bash scripts/setup_external.sh --medsam3"
+            )
+        # MedSAM3 bundles its own copy of sam3 — add it to sys.path
+        medsam3_str = str(_MEDSAM3_ROOT)
+        if medsam3_str not in sys.path:
+            sys.path.insert(0, medsam3_str)
+
+    def _load_model(
+        self, ckpt_path: str, output_channels: int, device: str = "cpu"
+    ) -> None:
+        path = Path(ckpt_path)
+        if not path.exists():
+            raise FileNotFoundError(
+                f"MedSAM3 checkpoint not found: {path}. "
+                "Provide a valid method.kd.teacher.ckpt_path."
+            )
+
+        self._ckpt_hash = self._compute_ckpt_hash(path)
+
+        # MedSAM3 bundles its own sam3 package
+        from sam3 import build_sam3_image_model
+
+        logger.info(f"MedSAM3Backend: loading base model from {path}")
+        self._model = build_sam3_image_model(
+            checkpoint_path=str(path),
+            device=device,
+            eval_mode=True,
+            load_from_HF=False,
+            enable_segmentation=True,
+        )
+
+        # Apply LoRA weights if provided separately
+        lora_path = self._cfg.get("lora_path")
+        if lora_path:
+            self._apply_lora(lora_path)
+
+        # Freeze all parameters
+        for p in self._model.parameters():
+            p.requires_grad = False
+
+        adapter_channels = self._cfg.get("adapter_channels", 256)
+        self._adapter = _OutputAdapter(
+            in_channels=adapter_channels,
+            out_channels=output_channels,
+        ).to(device)
+
+        logger.info(
+            f"MedSAM3Backend: loaded (hash={self._ckpt_hash}, "
+            f"output_channels={output_channels}, lora={'yes' if lora_path else 'no'})"
+        )
+
+    def _apply_lora(self, lora_path: str) -> None:
+        """Apply LoRA weights from MedSAM3's fine-tuning."""
+        lora_p = Path(lora_path)
+        if not lora_p.exists():
+            raise FileNotFoundError(f"MedSAM3 LoRA weights not found: {lora_p}")
+
+        try:
+            sys.path.insert(0, str(_MEDSAM3_ROOT))
+            from lora_layers import apply_lora_to_model, LoRAConfig
+
+            # Apply default LoRA config then load weights
+            lora_cfg = LoRAConfig()
+            self._model = apply_lora_to_model(self._model, lora_cfg)
+
+            lora_state = torch.load(str(lora_p), map_location="cpu")
+            # Load only LoRA parameters
+            model_sd = self._model.state_dict()
+            lora_keys = {k: v for k, v in lora_state.items() if "lora_" in k}
+            model_sd.update(lora_keys)
+            self._model.load_state_dict(model_sd)
+            logger.info(f"MedSAM3Backend: applied {len(lora_keys)} LoRA parameters")
+        except ImportError:
+            logger.warning(
+                "MedSAM3 lora_layers not found; loading checkpoint as full model"
+            )
+
+    @staticmethod
+    def _compute_ckpt_hash(path: Path, nbytes: int = 4096) -> str:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            h.update(f.read(nbytes))
+        return h.hexdigest()[:16]
+
+    def forward_logits(self, x: torch.Tensor) -> torch.Tensor:
+        if self._model is None or self._adapter is None:
+            raise RuntimeError(
+                "MedSAM3Backend: model not loaded. Provide ckpt_path in config."
+            )
+        B, C_in, D, H, W = x.shape
+        features_3d = self._extract_features_3d(x)
+        target_shape = (D, H, W)
+        return self._adapter(features_3d, target_shape)
+
+    def _extract_features_3d(self, x: torch.Tensor) -> torch.Tensor:
+        """Extract backbone features from a 3D volume slice-by-slice."""
+        B, C_in, D, H, W = x.shape
+        backbone = self._model.backbone
+
+        slice_features = []
+        for d in range(D):
+            img_slice = x[:, :, d, :, :]
+            if img_slice.shape[1] == 1:
+                img_slice = img_slice.repeat(1, 3, 1, 1)
+            elif img_slice.shape[1] != 3:
+                img_slice = img_slice[:, :3, :, :]
+
+            with torch.no_grad():
+                vis_out = backbone.visual(img_slice)
+                if isinstance(vis_out, dict):
+                    feat = vis_out.get(
+                        "feature_maps",
+                        [vis_out.get("backbone_fpn", [None])[0]]
+                    )[0]
+                elif isinstance(vis_out, (list, tuple)):
+                    feat = vis_out[0] if len(vis_out) > 0 else vis_out
+                else:
+                    feat = vis_out
+
+            slice_features.append(feat)
+
+        features_3d = torch.stack(slice_features, dim=2)
+        return features_3d
+
+    def forward_features(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+        if self._model is None:
+            raise RuntimeError("MedSAM3Backend: model not loaded")
+        features_3d = self._extract_features_3d(x)
+        return {"backbone_features": features_3d}
+
+    @property
+    def metadata(self) -> Dict[str, Any]:
+        return {
+            "model_id": self._model_id,
+            "ckpt_hash": self._ckpt_hash,
+            "source_mode": "medsam3",
+            "frozen": True,
+            "use_features": False,
+            "feature_layers": [],
+        }
+
+    def to(self, device) -> "MedSAM3Backend":
+        self._device = str(device)
+        if self._model is not None:
+            self._model.to(device)
+        if self._adapter is not None:
+            self._adapter.to(device)
+        return self
+
+    def state_dict(self) -> Dict[str, Any]:
+        state: Dict[str, Any] = {"teacher_metadata": self.metadata}
+        if self._adapter is not None:
+            state["adapter_state_dict"] = self._adapter.state_dict()
+        return state
+
+    def eval(self) -> "MedSAM3Backend":
+        if self._model is not None:
+            self._model.eval()
+        if self._adapter is not None:
+            self._adapter.eval()
+        return self
+
+    @property
+    def has_model(self) -> bool:
+        return self._model is not None
+
+    @property
+    def is_external(self) -> bool:
+        return True

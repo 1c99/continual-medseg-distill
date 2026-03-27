@@ -114,7 +114,7 @@ method:
     weight: 0.7
     temperature: 2.0
     teacher:
-      type: snapshot    # snapshot (auto from previous task) | checkpoint (load from file)
+      type: snapshot    # snapshot | checkpoint | sam3 | medsam3
 ```
 
 | Mode | Description |
@@ -125,6 +125,40 @@ method:
 | `boundary` | Boundary-aware logit KD (up-weights voxels near class boundaries) |
 
 Feature mode requires `teacher.feature_layers` to specify which model layers to hook.
+
+## Teacher backends
+
+The teacher abstraction supports pluggable backends via `src/methods/teacher_backends/`. Each backend implements the `TeacherBackend` ABC.
+
+| Backend | Config `type` | Architecture | Status |
+|---------|---------------|-------------|--------|
+| `UNetBackend` | `snapshot` / `checkpoint` | Same as student (MONAI UNet) | Validated |
+| `SAM3Backend` | `sam3` | ViT-based (facebook/sam3) | Pending |
+| `MedSAM3Backend` | `medsam3` | ViT-based (MedSAM3) | Pending |
+
+### External teacher setup
+
+```bash
+bash scripts/setup_external.sh
+```
+
+### External teacher config example
+
+```yaml
+method:
+  name: distill
+  kd:
+    mode: logit
+    weight: 0.7
+    temperature: 2.0
+    teacher:
+      type: medsam3           # or sam3
+      ckpt_path: /path/to/medsam3_checkpoint.pt
+      output_channels: 6      # must match student out_channels
+      model_variant: vit_h    # architecture variant
+```
+
+External backends (`sam3`, `medsam3`) require `ckpt_path` and `output_channels`. They handle output spatial adaptation (interpolation to match student volume dims) internally.
 
 ## Config validation
 
