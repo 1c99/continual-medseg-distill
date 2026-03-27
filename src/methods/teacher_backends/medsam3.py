@@ -265,6 +265,9 @@ class MedSAM3Backend(TeacherBackend):
         B, C_in, D, H, W = x.shape
         backbone = self._model.backbone
 
+        # SAM3 backbone expects 1008x1008 input images
+        _SAM3_IMG_SIZE = 1008
+
         slice_features = []
         for d in range(D):
             img_slice = x[:, :, d, :, :]
@@ -272,6 +275,13 @@ class MedSAM3Backend(TeacherBackend):
                 img_slice = img_slice.repeat(1, 3, 1, 1)
             elif img_slice.shape[1] != 3:
                 img_slice = img_slice[:, :3, :, :]
+
+            # Resize to SAM3's expected spatial resolution
+            if img_slice.shape[-2] != _SAM3_IMG_SIZE or img_slice.shape[-1] != _SAM3_IMG_SIZE:
+                img_slice = F.interpolate(
+                    img_slice, size=(_SAM3_IMG_SIZE, _SAM3_IMG_SIZE),
+                    mode="bilinear", align_corners=False,
+                )
 
             with torch.no_grad():
                 # SAM3VLBackbone exposes forward_image -> dict with vision_features
