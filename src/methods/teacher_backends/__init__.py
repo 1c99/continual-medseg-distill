@@ -29,10 +29,14 @@ def create_backend(cfg: Dict[str, Any]) -> TeacherBackend:
         from .medsam3 import MedSAM3Backend
         backend = MedSAM3Backend()
         backend.load(cfg)
+    elif teacher_type == "medsam2":
+        from .medsam2 import MedSAM2Backend
+        backend = MedSAM2Backend()
+        backend.load(cfg)
     else:
         raise ValueError(
             f"Unknown teacher backend type: '{teacher_type}'. "
-            "Valid types: snapshot, checkpoint, sam3, medsam3"
+            "Valid types: snapshot, checkpoint, sam3, medsam3, medsam2"
         )
 
     # Conditionally wrap with LoRA (no-op if peft.enabled is false/absent)
