@@ -486,6 +486,59 @@ def test_smoke_matrix_2task_all_methods():
             assert "mean_bwt" in result["forgetting"], f"{method_name}: missing BWT"
 
 
+def test_smoke_ortho_lora_2task():
+    """End-to-end A→B with orthogonal LoRA + distill_replay_ewc on synthetic data."""
+    logger = setup_logger("smoke_ortho_lora")
+    cfg = _tiny_cfg(
+        method={
+            "name": "distill_replay_ewc",
+            "kd": {"weight": 0.5},
+            "replay": {"buffer_size": 10},
+            "ewc": {"weight": 0.1, "fisher_samples": 1},
+        },
+        model={
+            "name": "monai_unet", "in_channels": 1, "out_channels": 3,
+            "channels": [8, 16], "strides": [2],
+            "lora": {
+                "enabled": True,
+                "mode": "orthogonal",
+                "rank": 4,
+                "alpha": 8.0,
+                "target_modules": ["conv.unit"],
+                "ortho_lambda": 0.1,
+            },
+        },
+    )
+
+    model = build_model(cfg)
+    method = create_method(cfg)
+    tasks = [{"id": "tA"}, {"id": "tB"}]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out_dir = Path(tmp) / "ortho_lora"
+        result = run_task_sequence(
+            model, method, tasks, cfg, logger, evaluate, out_dir, dry_run=True,
+        )
+        assert len(result["task_order"]) == 2
+        assert "mean_bwt" in result["forgetting"]
+
+        # Verify per-task LoRA adapter checkpoints exist
+        lora_a = out_dir / "tA" / "checkpoints" / "lora_state_tA.pt"
+        lora_b = out_dir / "tB" / "checkpoints" / "lora_state_tB.pt"
+        assert lora_a.exists(), f"Missing LoRA checkpoint: {lora_a}"
+        assert lora_b.exists(), f"Missing LoRA checkpoint: {lora_b}"
+
+        # Verify saved LoRA states are non-empty dicts
+        state_a = torch.load(lora_a, map_location="cpu", weights_only=False)
+        state_b = torch.load(lora_b, map_location="cpu", weights_only=False)
+        assert len(state_a) > 0, "LoRA state A should be non-empty"
+        assert len(state_b) > 0, "LoRA state B should be non-empty"
+
+        # Verify method accumulated prev_lora_states
+        assert len(method.prev_lora_states) >= 1, \
+            "Method should have at least 1 previous LoRA state after 2 tasks"
+
+
 # ====================================================================
 # Runner
 # ====================================================================
@@ -532,6 +585,7 @@ if __name__ == "__main__":
         ("integration_distill", test_integration_distill),
         ("integration_distill_replay_ewc", test_integration_distill_replay_ewc),
         ("smoke_matrix_2task_all_methods", test_smoke_matrix_2task_all_methods),
+        ("smoke_ortho_lora_2task", test_smoke_ortho_lora_2task),
     ]
 
     for name, fn in tests:

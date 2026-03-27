@@ -134,7 +134,16 @@ def train(
     lr = tcfg.get("lr", 1e-3)
     epochs = tcfg.get("epochs", 1)
     max_steps = tcfg.get("max_steps_per_epoch", 3 if dry_run else 100)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+
+    # When student LoRA is enabled, only train LoRA parameters
+    lora_cfg = cfg.get("model", {}).get("lora", {})
+    if lora_cfg.get("enabled", False):
+        from src.models.lora import get_lora_params
+        trainable = list(get_lora_params(model))
+        trainer_logger.info(f"Optimizer: {len(trainable)} LoRA param groups")
+        optimizer = torch.optim.Adam(trainable, lr=lr)
+    else:
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     global_step = 0
     best_metric = None

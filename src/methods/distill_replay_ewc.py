@@ -22,7 +22,12 @@ logger = logging.getLogger(__name__)
 
 
 class DistillReplayEWCMethod(ReplayMethod):
-    """Combined scaffold: distillation + replay + Fisher-based EWC regularization."""
+    """Combined scaffold: distillation + replay + Fisher-based EWC regularization.
+
+    Optionally supports Orthogonal LoRA regularization when
+    ``model.lora.mode == "orthogonal"``, penalizing subspace overlap between
+    the current task's LoRA adapters and those from previous tasks.
+    """
 
     def __init__(self, cfg: Dict):
         super().__init__(cfg)
@@ -40,6 +45,13 @@ class DistillReplayEWCMethod(ReplayMethod):
 
         self.prev_params: Dict[str, torch.Tensor] = {}
         self.fisher: Dict[str, torch.Tensor] = {}
+
+        # Orthogonal LoRA support
+        lora_cfg = cfg.get("model", {}).get("lora", {})
+        self._lora_enabled = bool(lora_cfg.get("enabled", False))
+        self._lora_mode = lora_cfg.get("mode", "standard")
+        self._ortho_lambda = float(lora_cfg.get("ortho_lambda", 0.1))
+        self.prev_lora_states: list = []
 
     @property
     def teacher_model(self) -> nn.Module | None:
@@ -135,7 +147,18 @@ class DistillReplayEWCMethod(ReplayMethod):
             ) * (T * T)
 
         ewc = self._ewc_penalty(model, base_loss.device)
-        return base_loss + self.kd_weight * kd + self.ewc_weight * ewc
+
+        # Orthogonal LoRA regularization
+        ortho = torch.tensor(0.0, device=base_loss.device)
+        if (
+            self._lora_enabled
+            and self._lora_mode == "orthogonal"
+            and self.prev_lora_states
+        ):
+            from src.models.ortho_reg import orthogonality_loss
+            ortho = orthogonality_loss(model, self.prev_lora_states)
+
+        return base_loss + self.kd_weight * kd + self.ewc_weight * ewc + self._ortho_lambda * ortho
 
     def post_task_update(self, model: nn.Module, **kwargs) -> None:
         # Teacher snapshot (skip for external teachers like SAM3/MedSAM3)
@@ -152,6 +175,16 @@ class DistillReplayEWCMethod(ReplayMethod):
         self.prev_params = {
             n: p.detach().cpu().clone() for n, p in model.named_parameters()
         }
+        # Save current LoRA state for orthogonality constraint in next task
+        if self._lora_enabled:
+            from src.models.lora import extract_lora_state
+            lora_state = extract_lora_state(model)
+            if lora_state:
+                self.prev_lora_states.append(lora_state)
+                logger.info(
+                    f"Saved LoRA state for ortho constraint "
+                    f"({len(self.prev_lora_states)} task(s) stored)"
+                )
 
     def save_state(self, path: Path, model_template: nn.Module | None = None) -> None:
         path = Path(path)
@@ -162,6 +195,7 @@ class DistillReplayEWCMethod(ReplayMethod):
             "memory": [
                 {"image": m["image"], "label": m["label"]} for m in self.memory
             ],
+            "prev_lora_states": self.prev_lora_states,
         }
         state.update(self.teacher.state_dict())
         torch.save(state, path)
@@ -171,4 +205,5 @@ class DistillReplayEWCMethod(ReplayMethod):
         self.fisher = state.get("fisher", {})
         self.prev_params = state.get("prev_params", {})
         self.memory = state.get("memory", [])
+        self.prev_lora_states = state.get("prev_lora_states", [])
         self.teacher.load_state_dict(state, model_template=model_template)

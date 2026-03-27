@@ -400,6 +400,16 @@ def run_task_sequence(
             task_id,
         )
 
+        # Save per-task LoRA adapter state (if LoRA is enabled)
+        lora_cfg = global_cfg.get("model", {}).get("lora", {})
+        if lora_cfg.get("enabled", False):
+            from src.models.lora import extract_lora_state
+            lora_state = extract_lora_state(model)
+            if lora_state:
+                lora_path = task_output / "checkpoints" / f"lora_state_{task_id}.pt"
+                torch.save(lora_state, lora_path)
+                logger.info(f"  saved LoRA adapter state: {lora_path}")
+
         # Save progress for resume
         _save_progress(
             output_dir, task_idx, task_id, task_order, task_eval_history,

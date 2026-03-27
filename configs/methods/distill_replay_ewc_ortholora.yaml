@@ -1,0 +1,20 @@
+method:
+  name: distill_replay_ewc
+  kd:
+    weight: 0.5
+    temperature: 2.0
+  replay:
+    buffer_size: 200
+    weight: 1.0
+  ewc:
+    weight: 0.2
+    fisher_samples: 64
+
+model:
+  lora:
+    enabled: true
+    mode: orthogonal
+    rank: 8
+    alpha: 16
+    target_modules: ["conv.unit"]
+    ortho_lambda: 0.1

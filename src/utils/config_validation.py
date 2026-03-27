@@ -132,9 +132,11 @@ def _validate_method(cfg: Dict) -> List[str]:
                 "method.kd.teacher.ckpt_path is required when teacher.type=checkpoint"
             )
         if teacher_type in {"sam3", "medsam3"}:
-            if not teacher_cfg.get("ckpt_path"):
+            ckpt_val = teacher_cfg.get("ckpt_path")
+            if not ckpt_val and not teacher_cfg.get("load_from_hf", False):
                 errors.append(
-                    f"method.kd.teacher.ckpt_path is required when teacher.type={teacher_type}"
+                    f"method.kd.teacher.ckpt_path is required when teacher.type={teacher_type} "
+                    "(set to 'auto' for HuggingFace auto-download)"
                 )
             if not teacher_cfg.get("output_channels"):
                 errors.append(
@@ -186,6 +188,28 @@ def _validate_method(cfg: Dict) -> List[str]:
     return errors
 
 
+def _validate_lora(cfg: Dict) -> List[str]:
+    errors: List[str] = []
+    lora_cfg = cfg.get("model", {}).get("lora", {})
+    if not lora_cfg.get("enabled", False):
+        return errors
+
+    rank = lora_cfg.get("rank", 8)
+    if isinstance(rank, int) and rank < 1:
+        errors.append(f"model.lora.rank={rank} must be >= 1")
+    alpha = lora_cfg.get("alpha", 16)
+    if isinstance(alpha, (int, float)) and alpha < 1:
+        errors.append(f"model.lora.alpha={alpha} must be >= 1")
+    mode = lora_cfg.get("mode", "standard")
+    valid_modes = {"standard", "orthogonal"}
+    if mode not in valid_modes:
+        errors.append(f"model.lora.mode='{mode}' is invalid. Valid: {valid_modes}")
+    ortho_lambda = lora_cfg.get("ortho_lambda", 0.1)
+    if isinstance(ortho_lambda, (int, float)) and ortho_lambda < 0:
+        errors.append(f"model.lora.ortho_lambda={ortho_lambda} must be >= 0")
+    return errors
+
+
 def _validate_train(cfg: Dict) -> List[str]:
     errors: List[str] = []
     tcfg = cfg.get("train", {})
@@ -223,6 +247,7 @@ def validate_config(cfg: Dict[str, Any], strict: bool = True) -> List[str]:
     errors.extend(_validate_model(cfg))
     errors.extend(_validate_data(cfg))
     errors.extend(_validate_method(cfg))
+    errors.extend(_validate_lora(cfg))
     errors.extend(_validate_train(cfg))
 
     if errors and strict:
@@ -280,7 +305,12 @@ def validate_paths(cfg: Dict[str, Any]) -> List[str]:
     # Teacher checkpoint
     teacher_cfg = cfg.get("method", {}).get("kd", {}).get("teacher", {})
     ckpt = teacher_cfg.get("ckpt_path")
-    if ckpt and not Path(ckpt).exists():
+    if ckpt and ckpt != "auto" and not Path(ckpt).exists():
         errors.append(f"method.kd.teacher.ckpt_path not found: {ckpt}")
+
+    # Teacher LoRA weights
+    lora = teacher_cfg.get("lora_path")
+    if lora and not Path(lora).exists():
+        errors.append(f"method.kd.teacher.lora_path not found: {lora}")
 
     return errors
