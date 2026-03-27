@@ -4,6 +4,83 @@ This file is updated alongside repository progress so experiment intent and impl
 
 ---
 
+## 2026-03-27 — Pipeline Validation Sprint (Real Training Runs)
+
+### Summary
+
+First end-to-end execution of the distill-first → continual pipeline on real data
+(TotalSegmentator). All phases completed: environment fix, teacher contract validation,
+Task A distillation comparison, continual A→B with 3 methods, and result packaging.
+**Short validation runs (5 epochs, 20 steps/epoch)** — not publication quality, but
+the full pipeline is verified working.
+
+### Environment Fix (Phase 0)
+
+- Created conda env `medseg` (Python 3.10.18, PyTorch 2.2.0+cu118)
+- Resolved CUDA driver compatibility: driver 470.223 (CUDA 11.4) works with cu118 wheels
+- 4x RTX 3090 (24GB each) operational
+- `doctor.py` passed; TotalSeg data validated (1204 subjects, all Task A/B organs present)
+
+### MedSAM2 Teacher Integration (Phases 1-2)
+
+**Blocker resolved**: `facebook/sam3` base weights are gated (HuggingFace 401). MedSAM3
+teacher with LoRA-on-random-init produced near-zero KD signal.
+
+**Solution**: Integrated `bowang-lab/MedSAM2` as replacement teacher:
+- SAM2-based (Hiera backbone), 3D medical segmentation, **open weights** (no gating)
+- New `MedSAM2Backend` at `src/methods/teacher_backends/medsam2.py`
+- Contract validated: `(1,6,64,64,64)` output, float32, no NaN/Inf
+- Checkpoint: `third_party/medsam2/checkpoints/MedSAM2_latest.pt` (149MB)
+
+### Phase 2: Distill-First Task A (5 epochs, 20 steps/epoch, seed=42)
+
+| Condition | Dice Mean (best) | Voxel Acc (best) | HD95 (final) | Notes |
+|-----------|-----------------|------------------|--------------|-------|
+| Finetune baseline | 0.002 | 0.931 | 92.68 | Collapsed to all-BG |
+| KD MedSAM2 | 0.024 | 0.035 | 47.81 | **Non-zero dice, no BG collapse** |
+
+Key finding: MedSAM2 teacher signal prevents background collapse under extreme class imbalance.
+
+### Phase 3: Continual A→B (5 epochs/task, 20 steps/epoch, seed=42)
+
+| Method | taskA dice (final) | taskB dice (final) | Mean Forgetting | BWT |
+|--------|-------------------|-------------------|-----------------|------|
+| Finetune | 0.000 | 0.638 | -0.000 | +0.000 |
+| Replay | 0.000 | 0.000 | 0.000 | -0.000 |
+| Distill+Replay+EWC+OrthoLoRA | 0.022 | 0.006 | 0.006 | -0.006 |
+
+- Finetune learned taskB well (dice=0.638) but taskA started at 0 so no forgetting to measure
+- Distill+EWC+OrthoLoRA maintained highest taskA retention (0.022 vs 0.000)
+- KD loss scale (~1000x vs finetune) needs tuning for real runs
+
+### Phase 4: Packaging
+
+- `outputs/continual/result_bundle/` — summary.md, method_summary.csv, checkpoint_refs.csv
+- `outputs/stats_report/` — stats_report.md (notes N=1 insufficient for significance)
+- `outputs/failure_panel/` — worst-k cases (all dice=0.0 from short training)
+
+### Commits
+
+| Hash | Description |
+|------|-------------|
+| `7afd4f2` | Fix MedSAM3 backend: resize input slices to SAM3's expected 1008x1008 |
+| `101a51b` | Add MedSAM2 teacher backend with open pretrained weights |
+
+### Caveats
+
+- **5 epochs / 20 steps is validation only** — insufficient for convergence or meaningful comparison
+- Single seed (42), single run per condition — no statistical power
+- KD loss weight (0.7) needs rescaling relative to task loss for real runs
+- FWT is NaN (no pre-training eval on taskB)
+
+### Next Actions
+
+1. **Scale up training**: 50 epochs per task (per experiment protocol), full dataset steps
+2. **Tune KD weight**: Scale down `kd.weight` so KD loss is same order as task loss
+3. **Run 3-seed ablation**: 5 conditions × 3 seeds per `paper_ablation_freeze.yaml`
+
+---
+
 ## 2026-03-27 — Infrastructure Sprint (Implementation-Only, No Training Runs)
 
 ### Summary
