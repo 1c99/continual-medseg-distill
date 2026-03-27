@@ -88,9 +88,12 @@ class MedSAM3Backend(TeacherBackend):
         ckpt_path = cfg.get("ckpt_path")
         output_channels = cfg.get("output_channels")
 
-        if ckpt_path:
+        if ckpt_path and ckpt_path != "auto":
             self._ensure_medsam3_available()
             self._load_model(ckpt_path, output_channels or 14, device)
+        elif ckpt_path == "auto" or cfg.get("load_from_hf", False):
+            self._ensure_medsam3_available()
+            self._load_model_from_hf(output_channels or 14, device)
 
     def _ensure_medsam3_available(self) -> None:
         if not _MEDSAM3_ROOT.exists():
@@ -147,6 +150,54 @@ class MedSAM3Backend(TeacherBackend):
             f"output_channels={output_channels}, lora={'yes' if lora_path else 'no'})"
         )
 
+    def _load_model_from_hf(
+        self, output_channels: int, device: str = "cpu"
+    ) -> None:
+        """Load SAM3 base model via HuggingFace auto-download, then apply LoRA."""
+        from sam3 import build_sam3_image_model
+
+        logger.info("MedSAM3Backend: loading base model from HuggingFace (auto-download)")
+        try:
+            self._model = build_sam3_image_model(
+                device=device,
+                eval_mode=True,
+                load_from_HF=True,
+                enable_segmentation=True,
+            )
+        except Exception as e:
+            # If HF download fails (e.g. gated repo), build architecture without weights
+            logger.warning(
+                f"MedSAM3Backend: HF checkpoint download failed ({e}). "
+                "Building model architecture without base weights."
+            )
+            self._model = build_sam3_image_model(
+                device=device,
+                eval_mode=True,
+                load_from_HF=False,
+                checkpoint_path=None,
+                enable_segmentation=True,
+            )
+
+        # Apply LoRA weights if provided
+        lora_path = self._cfg.get("lora_path")
+        if lora_path:
+            self._apply_lora(lora_path)
+
+        # Freeze all parameters
+        for p in self._model.parameters():
+            p.requires_grad = False
+
+        adapter_channels = self._cfg.get("adapter_channels", 256)
+        self._adapter = _OutputAdapter(
+            in_channels=adapter_channels,
+            out_channels=output_channels,
+        ).to(device)
+
+        logger.info(
+            f"MedSAM3Backend: loaded from HF (output_channels={output_channels}, "
+            f"lora={'yes' if lora_path else 'no'})"
+        )
+
     def _apply_lora(self, lora_path: str) -> None:
         """Apply LoRA weights from MedSAM3's fine-tuning."""
         lora_p = Path(lora_path)
@@ -157,14 +208,33 @@ class MedSAM3Backend(TeacherBackend):
             sys.path.insert(0, str(_MEDSAM3_ROOT))
             from lora_layers import apply_lora_to_model, LoRAConfig
 
-            # Apply default LoRA config then load weights
-            lora_cfg = LoRAConfig()
+            # Infer LoRA rank from checkpoint weights
+            lora_state = torch.load(str(lora_p), map_location="cpu")
+            lora_keys = {k: v for k, v in lora_state.items() if "lora_" in k}
+
+            # Detect rank from first lora_A parameter shape
+            inferred_rank = 8  # default
+            for k, v in lora_keys.items():
+                if "lora_A" in k:
+                    inferred_rank = v.shape[1] if v.ndim == 2 else v.shape[0]
+                    break
+            logger.info(f"MedSAM3Backend: inferred LoRA rank={inferred_rank} from checkpoint")
+
+            # Enable LoRA on all components that appear in the checkpoint
+            lora_cfg = LoRAConfig(
+                rank=inferred_rank,
+                alpha=inferred_rank * 2,
+                apply_to_vision_encoder=True,
+                apply_to_text_encoder=True,
+                apply_to_geometry_encoder=True,
+                apply_to_detr_encoder=True,
+                apply_to_detr_decoder=True,
+                apply_to_mask_decoder=True,
+            )
             self._model = apply_lora_to_model(self._model, lora_cfg)
 
-            lora_state = torch.load(str(lora_p), map_location="cpu")
             # Load only LoRA parameters
             model_sd = self._model.state_dict()
-            lora_keys = {k: v for k, v in lora_state.items() if "lora_" in k}
             model_sd.update(lora_keys)
             self._model.load_state_dict(model_sd)
             logger.info(f"MedSAM3Backend: applied {len(lora_keys)} LoRA parameters")
@@ -204,12 +274,25 @@ class MedSAM3Backend(TeacherBackend):
                 img_slice = img_slice[:, :3, :, :]
 
             with torch.no_grad():
-                vis_out = backbone.visual(img_slice)
+                # SAM3VLBackbone exposes forward_image -> dict with vision_features
+                if hasattr(backbone, "forward_image"):
+                    vis_out = backbone.forward_image(img_slice)
+                elif hasattr(backbone, "vision_backbone"):
+                    vis_out = backbone.vision_backbone(img_slice)
+                else:
+                    vis_out = backbone.visual(img_slice)
+
                 if isinstance(vis_out, dict):
                     feat = vis_out.get(
-                        "feature_maps",
-                        [vis_out.get("backbone_fpn", [None])[0]]
-                    )[0]
+                        "vision_features",
+                        vis_out.get(
+                            "feature_maps",
+                            [vis_out.get("backbone_fpn", [None])[0]]
+                        ),
+                    )
+                    # vision_features may be a single tensor or list
+                    if isinstance(feat, (list, tuple)):
+                        feat = feat[0]
                 elif isinstance(vis_out, (list, tuple)):
                     feat = vis_out[0] if len(vis_out) > 0 else vis_out
                 else:

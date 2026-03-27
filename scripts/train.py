@@ -10,6 +10,9 @@ _REPO_ROOT = str(Path(__file__).resolve().parents[1])
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
+import hashlib
+import json
+
 import yaml
 import torch
 
@@ -68,6 +71,36 @@ def main():
     )
     metrics = evaluate(model, val_loader, cfg, logger)
     logger.info(f"eval={metrics}")
+
+    # Write run manifest with teacher checkpoint metadata
+    output_dir = Path(cfg.get("output", {}).get("dir", "outputs/runs/default"))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "seed": seed,
+        "method": cfg.get("method", {}).get("name", "finetune"),
+        "device": cfg["runtime"]["device"],
+        "metrics": metrics if isinstance(metrics, dict) else {},
+    }
+    teacher_cfg = cfg.get("method", {}).get("kd", {}).get("teacher", {})
+    if teacher_cfg:
+        teacher_meta = {
+            "type": teacher_cfg.get("type"),
+            "ckpt_path": teacher_cfg.get("ckpt_path"),
+            "lora_path": teacher_cfg.get("lora_path"),
+            "source_repo": teacher_cfg.get("source_repo"),
+        }
+        # Compute checkpoint hashes for provenance
+        for key in ("ckpt_path", "lora_path"):
+            fpath = teacher_cfg.get(key)
+            if fpath and fpath != "auto" and Path(fpath).exists():
+                h = hashlib.sha256()
+                with open(fpath, "rb") as fh:
+                    h.update(fh.read(4096))
+                teacher_meta[f"{key}_hash"] = h.hexdigest()[:16]
+        manifest["teacher"] = teacher_meta
+    manifest_path = output_dir / "run_manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2, default=str))
+    logger.info(f"run_manifest written to {manifest_path}")
 
 
 if __name__ == "__main__":

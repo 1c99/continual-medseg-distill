@@ -1,0 +1,60 @@
+# Real-Checkpoint Sprint: KD with MedSAM3 Teacher on Task A (5 organs)
+# Paired with realckpt_finetune_taskA.yaml for controlled comparison.
+# Short validation run — not publication-quality.
+
+experiment:
+  name: realckpt_kd_taskA
+  seed: 42
+
+runtime:
+  device: auto
+
+model:
+  name: monai_unet
+  in_channels: 1
+  out_channels: 6          # BG + 5 organs
+  channels: [16, 32, 64, 128]
+  strides: [2, 2, 2]
+  num_res_units: 2
+
+method:
+  name: distill
+  kd:
+    mode: logit
+    weight: 0.7
+    temperature: 2.0
+    cache:
+      enabled: false
+    teacher:
+      type: medsam3
+      ckpt_path: auto                            # SAM3 base auto-downloaded via HuggingFace
+      lora_path: checkpoints/medsam3_lora.pt     # MedSAM3 LoRA weights
+      model_id: medsam3_realckpt
+      output_channels: 6                         # must match student out_channels
+      adapter_channels: 256
+
+data:
+  source: totalseg
+  batch_size: 2
+  val_batch_size: 2
+  totalseg:
+    root: /media/user/data2/data2/data/Totalsegmentator_dataset
+    organs:
+      - liver
+      - spleen
+      - kidney_left
+      - kidney_right
+      - pancreas
+    shape: [64, 64, 64]
+    split_manifest: data/splits/totalseg_train_clean_v1.json
+
+train:
+  epochs: 5
+  lr: 0.001
+  max_steps_per_epoch: 20
+  loss_type: dicece
+
+output:
+  dir: outputs/realckpt_benchmark/kd_taskA
+  best_metric: voxel_acc
+  best_mode: max

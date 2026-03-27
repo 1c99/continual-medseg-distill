@@ -1,0 +1,8 @@
+teachers:
+  medsam3:
+    backend_type: medsam3
+    ckpt_path: auto  # SAM3 base auto-downloaded by build_sam3_image_model(load_from_HF=True)
+    lora_path: checkpoints/medsam3_lora.pt
+    source_repo: lal-Joey/MedSAM3_v1
+    commit_or_tag: "best_lora_weights.pt from HF hub"
+    checksum: "499e638bb7c51dbe0dcc3bfb9dbfada74fc2d725e953fbb5bdb2dd1b72106f91"
