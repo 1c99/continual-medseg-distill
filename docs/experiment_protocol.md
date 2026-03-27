@@ -54,6 +54,7 @@ Four experimental conditions, each evaluated with the A→B continual sequence:
 | 2 | Student + MedSAM3 KD (Task A only) | `distill_medsam3_baseline.yaml` | Distillation on first task via `type: medsam3` backend, then finetune on B |
 | 3 | Student continual A→B (no KD) | `replay.yaml` | Replay buffer only, no teacher |
 | 4 | Student continual A→B with KD+replay+EWC | `distill_replay_ewc.yaml` | Full method: distillation + replay + EWC |
+| 5 | Orthogonal LoRA + KD+replay+EWC | `distill_replay_ewc_ortholora.yaml` | Condition 4 + student-side LoRA with orthogonality regularization between task adapters |
 
 ### Model Architecture
 
@@ -63,6 +64,8 @@ Four experimental conditions, each evaluated with the A→B continual sequence:
 - **Teacher (MedSAM3):** Loaded via `type: medsam3` teacher backend
   - Config: `configs/methods/distill_medsam3_baseline.yaml`
   - Uses teacher backend abstraction (`src/methods/teacher_backends/`)
+  - **Real checkpoint available:** SAM3 base (auto-downloaded via HF hub from MedSAM3's bundled copy) + LoRA weights at `checkpoints/medsam3_lora.pt` (source: `lal-Joey/MedSAM3_v1`). SAM3 standalone (`facebook/sam3`) is gated; using MedSAM3's bundled SAM3 base instead.
+  - Checkpoint registry: `configs/teachers/checkpoints.yaml`
   - Teacher is frozen during training; output adapted to match student spatial dims
   - Requires checkpoint: `method.kd.teacher.ckpt_path` and `output_channels`
 
@@ -117,6 +120,7 @@ Each experimental run produces:
 | Forgetting metrics | `{output}/forgetting.json` |
 | Summary | `{output}/multi_task_summary.json` |
 | Per-task checkpoints | `{output}/{task_id}/checkpoints/after_{task_id}.pt` |
+| Per-task LoRA adapters (Cond. 5) | `{output}/{task_id}/checkpoints/lora_state_{task_id}.pt` |
 | Training logs | `{output}/{task_id}/metrics.csv` |
 
 ---
@@ -185,6 +189,14 @@ python scripts/run_baseline_suite.py \
 - [x] A→B continual pipeline (multi_task_trainer.py)
 - [x] Forgetting/BWT/FWT computation
 - [x] 126+ tests passing
-- [ ] MedSAM3 checkpoint acquisition
+- [x] Orthogonal LoRA (Condition 5): student-side LoRA with subspace orthogonality regularization
+- [x] MedSAM3 checkpoint acquisition — LoRA weights from `lal-Joey/MedSAM3_v1` at `checkpoints/medsam3_lora.pt`; SAM3 base auto-downloads via HF hub. Registry: `configs/teachers/checkpoints.yaml`
+- [x] Experiment fairness guardrail (`scripts/check_experiment_fairness.py`)
+- [x] Statistical report generator (`scripts/stats_report.py`)
+- [x] Failure-case panel generator (`scripts/build_failure_panel.py`)
+- [x] Compute-efficiency reporter (`scripts/compute_report.py`)
+- [x] Ablation freeze spec (`configs/experiments/paper_ablation_freeze.yaml`) + drift validator (`scripts/validate_freeze_spec.py`)
+- [ ] MedSAM3 forward-contract validation (GPU required) — script pending, will produce `outputs/teacher_contract/medsam3_contract_report.md`
+- [ ] Minimal KD benchmark with real teacher (GPU required) — configs ready: `configs/runs/realckpt_{finetune,kd}_taskA.yaml`, will produce `outputs/realckpt_benchmark/`
 - [ ] Full 50-epoch A→B runs on real data
 - [ ] Multi-seed statistical analysis

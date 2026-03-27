@@ -4,6 +4,180 @@ This file is updated alongside repository progress so experiment intent and impl
 
 ---
 
+## 2026-03-27 — Infrastructure Sprint (Implementation-Only, No Training Runs)
+
+### Summary
+
+Code-only sprint adding experiment infrastructure scripts: fairness guardrails,
+statistical reporting, failure-case panel generation, compute-efficiency reporting,
+and a frozen ablation spec with drift validation. **No training commands were executed.**
+
+### What was completed
+
+**Scripts:**
+- `scripts/check_experiment_fairness.py` — validates parity (epochs, LR, batch size, split, seed) across compared conditions. Outputs markdown + JSON report with PASS/FAIL per key.
+- `scripts/stats_report.py` — offline stats from metrics CSVs: mean/std, bootstrap CI, paired comparison templates. Explicit caveats when data is insufficient.
+- `scripts/build_failure_panel.py` — indexes worst-k cases by metric, outputs panel manifest + markdown report template. Pipeline scaffolding for qualitative figures.
+- `scripts/compute_report.py` — parses logs/manifests, reports params, throughput, epoch time, VRAM. Outputs CSV + markdown.
+- `scripts/validate_freeze_spec.py` — validates run configs against the frozen ablation spec, detects drift.
+
+**Configs:**
+- `configs/experiments/paper_ablation_freeze.yaml` — locks the final experiment matrix: 5 conditions, 3 seeds, dataset/split, training protocol, metrics to report.
+
+**Tests:**
+- `tests/test_infra_scripts.py` — 31 unit tests covering parsing/validation logic for all new scripts.
+
+### Implementation-only note
+
+This sprint was explicitly constrained to infrastructure code only. No training
+jobs were executed. All scripts work with existing metrics files or produce
+explicit caveats when data is unavailable.
+
+### What each script does (no-run mode)
+
+| Script | Input | Output | Run mode |
+|--------|-------|--------|----------|
+| `check_experiment_fairness.py` | Method configs | Parity report (md + json) | Config-only |
+| `stats_report.py` | Metrics CSVs | Stats summary (md + json + csv) | Reads existing files |
+| `build_failure_panel.py` | Eval CSVs | Panel manifest (json + md) | Reads existing files |
+| `compute_report.py` | Run dirs | Compute report (md + json + csv) | Reads existing files |
+| `validate_freeze_spec.py` | Freeze spec + configs | Drift report (md + json) | Config-only |
+
+---
+
+## 2026-03-27 — Phase-Novelty: Orthogonal LoRA + Continual Distillation
+
+### Summary
+
+Added Orthogonal LoRA as a forgetting-mitigation mechanism for the student model.
+Student-side LoRA adapters (low-rank Conv3d wrappers) are injected into the UNet,
+with an orthogonality regularizer that penalizes subspace overlap between the
+current task's adapter and adapters from previous tasks.
+
+### What was completed
+
+**Core Implementation:**
+- `src/models/lora.py` — `LoRAConv3d` module + inject/extract/merge/load utilities
+- `src/models/ortho_reg.py` — `orthogonality_loss()` computing ||A_curr^T @ A_prev||²_F + ||B_curr @ B_prev^T||²_F
+- Student LoRA injection in `src/models/factory.py` (config-driven via `model.lora.*`)
+- Optimizer param filtering in `src/engine/trainer.py` (only LoRA params when enabled)
+- Ortho loss wired into `src/methods/distill_replay_ewc.py` training loop
+- Per-task LoRA state persistence in save/load and `multi_task_trainer.py`
+
+**Config:**
+- `configs/methods/distill_replay_ewc_ortholora.yaml` — preset config (Condition 5)
+- Config validation for `model.lora.*` keys in `src/utils/config_validation.py`
+
+**Tests:**
+- `tests/test_lora.py` — 10 unit tests (shape, freezing, roundtrip, merge, gradients)
+- `tests/test_ortho_reg.py` — 6 unit tests (zero/nonzero/orthogonal/gradient/multi-prev)
+- `tests/test_phase_next.py` — `test_smoke_ortho_lora_2task` integration smoke test
+
+**Config keys** (`model.lora.*`):
+- `enabled` (bool) — master toggle
+- `mode` — `standard` | `orthogonal`
+- `rank` (int) — LoRA rank (default: 8)
+- `alpha` (float) — scaling factor (default: 16)
+- `target_modules` (list[str]) — substring patterns for module targeting
+- `ortho_lambda` (float) — orthogonality regularization weight
+
+### Validated vs Pending
+
+| Component | Status |
+|-----------|--------|
+| LoRA module + utilities | **Validated** (unit tests) |
+| Orthogonality regularizer | **Validated** (unit tests) |
+| Pipeline integration | **Validated** (smoke test) |
+| Per-task adapter checkpoints | **Validated** (smoke test) |
+| Config validation | **Validated** |
+| Real-data Ortho LoRA vs standard comparison | **Pending** (GPU) |
+
+---
+
+## 2026-03-27 — Phase-Teacher-RealCkpt: Real Checkpoint Validation Sprint
+
+### Summary
+
+End-to-end integration of a real MedSAM3 teacher checkpoint (SAM3 base + LoRA weights from `lal-Joey/MedSAM3_v1`). Checkpoint acquisition, registry, contract validation script, and minimal KD benchmark configs are complete. GPU validation runs are pending.
+
+### What was completed
+
+**Checkpoint Acquisition (Validated):**
+- MedSAM3 LoRA weights downloaded from HuggingFace (`lal-Joey/MedSAM3_v1`, file `best_lora_weights.pt`)
+- Symlinked at `checkpoints/medsam3_lora.pt` (SHA-256: `499e638bb7c51dbe0dcc3bfb9dbfada74fc2d725e953fbb5bdb2dd1b72106f91`)
+- SAM3 base weights: auto-downloaded by `build_sam3_image_model(load_from_HF=True)`, cached by HuggingFace hub
+- SAM3 standalone (`facebook/sam3`) is gated — using MedSAM3's bundled SAM3 copy instead
+
+**Checkpoint Registry (Validated):**
+- `configs/teachers/checkpoints.yaml` — records backend type, paths, source repo, and checksum
+- `scripts/download_checkpoints.sh` — automated download script wrapping HF CLI
+
+**Benchmark Configs (Validated — configs created, runs pending GPU):**
+- `configs/runs/realckpt_finetune_taskA.yaml` — student finetune baseline (no teacher)
+- `configs/runs/realckpt_kd_taskA.yaml` — student + real MedSAM3 teacher KD
+- Both share: seed 42, 5 epochs, 20 steps/epoch, Task A (5 organs), shape `[64,64,64]`, loss dicece
+
+### Validated vs Pending
+
+| Component | Status | Artifact |
+|-----------|--------|----------|
+| MedSAM3 LoRA weights downloaded | **Validated** | `checkpoints/medsam3_lora.pt` (symlink to HF cache) |
+| Checkpoint registry | **Validated** | `configs/teachers/checkpoints.yaml` |
+| Download automation script | **Validated** | `scripts/download_checkpoints.sh` |
+| Finetune baseline config | **Validated** | `configs/runs/realckpt_finetune_taskA.yaml` |
+| KD with real teacher config | **Validated** | `configs/runs/realckpt_kd_taskA.yaml` |
+| MedSAM3 forward-contract validation | **Blocked** (PyTorch 1.12 incompatible) | Script ready: `scripts/validate_teacher_contract.py` |
+| Minimal KD benchmark (finetune run) | **Pending** (GPU not released) | Config ready: `configs/runs/realckpt_finetune_taskA.yaml` |
+| Minimal KD benchmark (KD run) | **Blocked** (PyTorch 1.12 incompatible) | Config ready: `configs/runs/realckpt_kd_taskA.yaml` |
+| Benchmark comparison summary | **Blocked** | Depends on above runs |
+| Full 50-epoch A→B runs on real data | **Pending** | — |
+| Continual A→B with real MedSAM3 teacher | **Pending** | — |
+| Full ablation matrix (4 conditions x 3 seeds) | **Pending** | — |
+
+### Blocker: PyTorch version incompatibility
+
+**SAM3/MedSAM3 requires PyTorch 2.x** (uses `torch.nn.attention.sdpa_kernel` / `SDPBackend`).
+This workstation has **PyTorch 1.12.1+cu113** — the SAM3 import chain fails at
+`sam3/model/vl_combiner.py → from torch.nn.attention import sdpa_kernel, SDPBackend`.
+
+This blocks:
+- Contract validation with real MedSAM3 teacher
+- KD runs with real MedSAM3 teacher
+- Any code path that imports from `third_party/sam3/` or `third_party/medsam3/`
+
+**Does NOT block:**
+- Finetune baseline (no teacher import)
+- UNet proxy KD runs (already validated in Phase-Teacher Integration)
+- All existing tests (use mock/UNet backends only)
+
+**Resolution options:**
+1. Upgrade PyTorch to 2.x (check CUDA 11.3 compat — may need CUDA upgrade too)
+2. Create a separate conda env with PyTorch 2.x for teacher validation
+3. Defer real-teacher validation to a machine with PyTorch 2.x
+
+### Commands to run when blocker is resolved
+
+```bash
+# 1. Contract validation
+python scripts/validate_teacher_contract.py \
+  --backend medsam3 \
+  --lora-path checkpoints/medsam3_lora.pt \
+  --output-channels 6 \
+  --output-dir outputs/teacher_contract
+
+# 2. Finetune baseline (can run now — no SAM3 dependency)
+python scripts/train.py --config configs/runs/realckpt_finetune_taskA.yaml
+
+# 3. KD with real teacher (requires PyTorch 2.x)
+python scripts/train.py --config configs/runs/realckpt_kd_taskA.yaml
+```
+
+### Note on evidence quality
+
+The 5-epoch / 20-step benchmark is a sanity check only — it verifies that the real teacher checkpoint loads, produces valid gradients, and the KD pipeline runs end-to-end. It is **not** publication-quality evidence. Full 50-epoch runs with statistical replication (seeds {42, 123, 456}) remain pending.
+
+---
+
 ## 2026-03-27 — Phase-Teacher Integration: Backend Abstraction + External Teacher Support
 
 ### Summary

@@ -1,0 +1,103 @@
+# Paper Ablation Freeze Specification
+#
+# This file locks the final experimental matrix for the paper.
+# Any run claiming to be part of this study MUST match these parameters.
+# Use scripts/check_experiment_fairness.py to validate against drift.
+#
+# FROZEN: Do not modify without updating the spec_version.
+
+spec_version: "1.0"
+frozen_at: "2026-03-27"
+
+# ---- Conditions ----
+conditions:
+  - name: finetune
+    method_config: configs/methods/finetune.yaml
+    description: "Sequential fine-tune baseline (lower bound)"
+
+  - name: replay
+    method_config: configs/methods/replay.yaml
+    description: "Replay buffer only, no teacher"
+
+  - name: distill
+    method_config: configs/methods/distill.yaml
+    description: "Knowledge distillation only (snapshot teacher)"
+
+  - name: distill_replay_ewc
+    method_config: configs/methods/distill_replay_ewc.yaml
+    description: "Full method: KD + replay + EWC"
+
+  - name: distill_replay_ewc_ortholora
+    method_config: configs/methods/distill_replay_ewc_ortholora.yaml
+    description: "Orthogonal LoRA + KD + replay + EWC"
+
+# ---- Seeds ----
+seeds: [42, 123, 456]
+
+# ---- Dataset / Split ----
+dataset:
+  source: totalseg
+  split_manifest: configs/datasets/totalseg_train_clean_v1.json
+  task_sequence: configs/tasks/totalseg_AB_sequence.yaml
+
+# ---- Training Protocol (must be identical across conditions) ----
+training:
+  epochs: 50
+  lr: 0.001
+  batch_size: 2
+  loss_type: dicece
+  input_shape: [128, 128, 128]
+  max_steps_per_epoch: null  # no limit for real runs
+  amp: false
+
+# ---- Model ----
+model:
+  name: monai_unet
+  in_channels: 1
+  out_channels: 6
+  channels: [16, 32, 64, 128]
+  strides: [2, 2, 2]
+  num_res_units: 2
+
+# ---- Metrics to Report ----
+metrics:
+  primary: dice_mean
+  secondary:
+    - hd95_mean
+    - voxel_acc
+  forgetting:
+    - mean_bwt
+    - mean_forgetting
+    - mean_fwt
+  per_class: true
+
+# ---- Expected Artifacts ----
+artifacts:
+  per_condition:
+    - "{output}/{task_id}/checkpoints/after_{task_id}.pt"
+    - "{output}/{task_id}/checkpoints/best.pt"
+    - "{output}/{task_id}/checkpoints/last.pt"
+    - "{output}/{task_id}/metrics.csv"
+  per_sequence:
+    - "{output}/task_eval_matrix.csv"
+    - "{output}/forgetting.json"
+    - "{output}/multi_task_summary.json"
+  ortholora_extra:
+    - "{output}/{task_id}/checkpoints/lora_state_{task_id}.pt"
+
+# ---- Parity Keys (checked by fairness validator) ----
+# These keys MUST be identical across all conditions.
+parity_keys:
+  - train.epochs
+  - train.lr
+  - train.loss_type
+  - train.max_steps_per_epoch
+  - data.source
+  - data.batch_size
+  - model.name
+  - model.in_channels
+  - model.out_channels
+  - model.channels
+  - model.strides
+  - model.num_res_units
+  - experiment.seed

@@ -6,7 +6,8 @@ This repo is intentionally lightweight and executable. It includes method skelet
 - sequential fine-tune
 - replay
 - distillation
-- distillation + replay + EWC (skeleton)
+- distillation + replay + EWC
+- **orthogonal LoRA** — student-side low-rank adapters with subspace orthogonality regularization
 
 > Status: scaffold for fast iteration. Many components are marked with `TODO` for full research implementation.
 
@@ -101,6 +102,7 @@ or use one of:
 - `configs/methods/replay.yaml`
 - `configs/methods/distill.yaml`
 - `configs/methods/distill_replay_ewc.yaml`
+- `configs/methods/distill_replay_ewc_ortholora.yaml` — with orthogonal LoRA
 
 ## KD mode selection (distill method)
 
@@ -126,6 +128,26 @@ method:
 
 Feature mode requires `teacher.feature_layers` to specify which model layers to hook.
 
+## Orthogonal LoRA (student-side)
+
+Inject low-rank adapters into the student UNet with an orthogonality constraint
+that pushes each task's adapter to learn in a subspace orthogonal to previous tasks:
+
+```yaml
+model:
+  lora:
+    enabled: true
+    mode: orthogonal    # standard | orthogonal
+    rank: 8
+    alpha: 16
+    target_modules: ["conv.unit"]
+    ortho_lambda: 0.1   # weight for orthogonality regularization
+```
+
+When enabled, base model weights are frozen and only LoRA parameters are trained.
+Per-task adapter states are saved as `lora_state_{task_id}.pt` alongside model checkpoints.
+Use `mode: standard` for LoRA without the orthogonality penalty.
+
 ## Teacher backends
 
 The teacher abstraction supports pluggable backends via `src/methods/teacher_backends/`. Each backend implements the `TeacherBackend` ABC.
@@ -133,8 +155,8 @@ The teacher abstraction supports pluggable backends via `src/methods/teacher_bac
 | Backend | Config `type` | Architecture | Status |
 |---------|---------------|-------------|--------|
 | `UNetBackend` | `snapshot` / `checkpoint` | Same as student (MONAI UNet) | Validated |
-| `SAM3Backend` | `sam3` | ViT-based (facebook/sam3) | Pending |
-| `MedSAM3Backend` | `medsam3` | ViT-based (MedSAM3) | Pending |
+| `SAM3Backend` | `sam3` | ViT-based (facebook/sam3) | Pending (gated model) |
+| `MedSAM3Backend` | `medsam3` | ViT-based (MedSAM3) | Checkpoint acquired, GPU validation pending |
 
 ### External teacher setup
 
@@ -263,9 +285,40 @@ Ranking logic:
 - Forgetting ranking is included when a forgetting-like metric exists
 - Missing fields are explicitly called out in `summary.md`
 
+## Experiment infrastructure (no-run mode)
+
+Scripts for experiment validation and reporting that work without running training:
+
+```bash
+# Fairness guardrail: check parity across compared conditions
+python scripts/check_experiment_fairness.py \
+    --configs configs/methods/finetune.yaml \
+             configs/methods/distill_replay_ewc.yaml \
+             configs/methods/distill_replay_ewc_ortholora.yaml
+
+# Statistical summary from existing metrics
+python scripts/stats_report.py \
+    --metrics outputs/baselines/*/metrics.csv --bootstrap
+
+# Failure-case panel from evaluation outputs
+python scripts/build_failure_panel.py \
+    --eval-dir outputs/smoke_AB_real --metric val_dice_mean --top-k 10
+
+# Compute-efficiency report
+python scripts/compute_report.py \
+    --scan-dir outputs/baselines/clean_v1_5ep
+
+# Validate configs against frozen ablation spec
+python scripts/validate_freeze_spec.py
+```
+
+The frozen ablation spec at `configs/experiments/paper_ablation_freeze.yaml` locks
+the final experiment matrix (5 conditions x 3 seeds) and is validated by
+`scripts/validate_freeze_spec.py` to detect config drift.
+
 ## Next implementation targets
 
 1. First real-data training run (TotalSeg liver, pending GPU driver update)
-2. Multi-task ablation runner across all 4 methods × task sequences
+2. Multi-task ablation runner across all 5 methods × task sequences
 3. Reservoir sampling for replay buffer (upgrade from FIFO)
 4. Metric polish (confidence intervals, cohort-level summaries)
