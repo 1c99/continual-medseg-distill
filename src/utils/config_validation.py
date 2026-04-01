@@ -106,12 +106,12 @@ def _validate_method(cfg: Dict) -> List[str]:
         errors.append("method.name is required")
         return errors
 
-    valid_methods = {"finetune", "replay", "distill", "distill_replay_ewc"}
+    valid_methods = {"finetune", "replay", "distill", "lwf", "distill_replay_ewc"}
     if name not in valid_methods:
         errors.append(f"method.name='{name}' is not supported. Valid: {valid_methods}")
         return errors
 
-    if name in {"distill", "distill_replay_ewc"}:
+    if name in {"distill", "lwf", "distill_replay_ewc"}:
         kd_cfg = mcfg.get("kd", {})
         mode = kd_cfg.get("mode", "logit")
         valid_modes = {"logit", "feature", "weighted", "boundary"}

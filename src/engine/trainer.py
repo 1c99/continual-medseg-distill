@@ -151,6 +151,8 @@ def train(
     for epoch in range(epochs):
         pbar = tqdm(train_loader, desc=f"epoch {epoch+1}/{epochs}", disable=not is_main)
         loss_sum = 0.0
+        loss_seg_sum = 0.0
+        loss_kd_sum = 0.0
         steps = 0
 
         for i, batch in enumerate(pbar):
@@ -173,12 +175,22 @@ def train(
             global_step += 1
             loss_val = float(loss.item()) * grad_accum_steps  # undo scaling for logging
             loss_sum += loss_val
+            # Track component losses if method exposes them
+            if hasattr(method, '_last_loss_seg'):
+                loss_seg_sum += method._last_loss_seg
+                loss_kd_sum += method._last_loss_kd
             steps += 1
             if is_main:
                 pbar.set_postfix(loss=loss_val, step=global_step)
 
         train_loss = loss_sum / max(steps, 1)
         row = {"epoch": epoch + 1, "train_loss": train_loss}
+        if hasattr(method, '_last_loss_seg') and loss_kd_sum > 0:
+            avg_seg = loss_seg_sum / max(steps, 1)
+            avg_kd = loss_kd_sum / max(steps, 1)
+            row["train_loss_seg"] = avg_seg
+            row["train_loss_kd"] = avg_kd
+            row["train_kd_seg_ratio"] = avg_kd / (avg_seg + 1e-8)
 
         eval_metrics = {}
         if evaluate_fn is not None and val_loader is not None:

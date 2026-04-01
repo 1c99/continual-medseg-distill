@@ -24,6 +24,7 @@ from src.models.factory import build_model
 from src.methods import create_method
 from src.engine.trainer import train
 from src.engine.evaluator import evaluate
+from src.engine.distributed import setup_ddp, cleanup_ddp
 
 
 def main():
@@ -50,9 +51,12 @@ def main():
     cfg.setdefault("runtime", {})
     cfg["runtime"]["device"] = "cuda" if torch.cuda.is_available() else "cpu"
 
+    # Distributed (DDP) setup — no-op when runtime.distributed.enabled is false
+    dist_ctx = setup_ddp(cfg)
+
     logger = setup_logger("train")
     logger.info(f"seed={seed}")
-    train_loader, val_loader = create_loaders(cfg)
+    train_loader, val_loader = create_loaders(cfg, dist_ctx=dist_ctx)
     model = build_model(cfg)
     method = create_method(cfg)
 
@@ -71,6 +75,9 @@ def main():
     )
     metrics = evaluate(model, val_loader, cfg, logger)
     logger.info(f"eval={metrics}")
+
+    # Cleanup DDP
+    cleanup_ddp()
 
     # Write run manifest with teacher checkpoint metadata
     output_dir = Path(cfg.get("output", {}).get("dir", "outputs/runs/default"))

@@ -30,6 +30,8 @@ output:
   best_mode: max
 
 data:
+  augmentation:
+    enabled: false   # off by default to not break existing runs
   source: synthetic
   batch_size: 2
   val_batch_size: 2

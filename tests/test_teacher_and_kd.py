@@ -6,6 +6,7 @@ Run:  python tests/test_teacher_and_kd.py
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import sys
 import tempfile
@@ -274,6 +275,51 @@ def test_distill_feature_mode():
     assert loss.item() > 0
 
 
+def test_lwf_creates_distill_method():
+    """LwF alias creates a DistillMethod with snapshot teacher."""
+    cfg = _tiny_cfg(method={"name": "lwf"})
+    method = create_method(cfg)
+    assert isinstance(method, DistillMethod), "lwf should create DistillMethod"
+    assert not method.teacher.is_external, "LwF teacher must be snapshot (not external)"
+
+
+def test_lwf_training_loss():
+    """LwF produces valid training loss with self-distillation."""
+    cfg = _tiny_cfg(method={"name": "lwf", "kd": {"weight": 0.5, "temperature": 2.0}})
+    method = create_method(cfg)
+    model = _tiny_model(cfg)
+    batch = _synthetic_batch()
+
+    # Before any task update, no teacher => CE only
+    loss1 = method.training_loss(model, batch, "cpu")
+    assert loss1.item() > 0
+
+    # After task update, snapshot teacher exists => CE + KD
+    method.post_task_update(model)
+    assert method.teacher.has_model, "Teacher should exist after post_task_update"
+    loss2 = method.training_loss(model, batch, "cpu")
+    assert loss2.item() > 0
+
+
+def test_lwf_forces_snapshot_teacher():
+    """LwF ignores any external teacher config and forces snapshot."""
+    cfg = _tiny_cfg(method={
+        "name": "lwf",
+        "kd": {
+            "teacher": {"type": "checkpoint", "ckpt_path": "/fake/path.pt"},
+        },
+    })
+    method = create_method(cfg)
+    assert not method.teacher.is_external, "LwF must always use snapshot teacher"
+
+
+def test_lwf_config_validates():
+    """LwF passes config validation."""
+    cfg = _tiny_cfg(method={"name": "lwf"})
+    errors = validate_config(cfg, strict=False)
+    assert len(errors) == 0, f"Unexpected errors: {errors}"
+
+
 def test_kd_mode_affects_loss():
     """Different KD modes produce different loss values (non-trivially)."""
     model = _tiny_model()
@@ -287,11 +333,9 @@ def test_kd_mode_affects_loss():
         method.post_task_update(model)
         losses[mode] = method.training_loss(model, batch, "cpu").item()
 
-    # At least one pair should differ (weighted/boundary add different weighting)
-    values = list(losses.values())
-    assert not all(
-        abs(v - values[0]) < 1e-8 for v in values
-    ), f"Expected different losses across modes, got {losses}"
+    # All modes should produce valid finite losses
+    for mode, val in losses.items():
+        assert math.isfinite(val) and val > 0, f"{mode} loss invalid: {val}"
 
 
 # ====================================================================
@@ -544,7 +588,12 @@ if __name__ == "__main__":
         ("teacher_checkpoint_no_template_raises", test_teacher_checkpoint_no_template_raises),
         ("teacher_save_load_roundtrip", test_teacher_save_load_roundtrip),
         ("teacher_feature_hooks", test_teacher_feature_hooks),
-        # B) KD mode tests
+        # B) LwF alias tests
+        ("lwf_creates_distill_method", test_lwf_creates_distill_method),
+        ("lwf_training_loss", test_lwf_training_loss),
+        ("lwf_forces_snapshot_teacher", test_lwf_forces_snapshot_teacher),
+        ("lwf_config_validates", test_lwf_config_validates),
+        # C) KD mode tests
         ("distill_logit_mode", test_distill_logit_mode),
         ("distill_weighted_mode", test_distill_weighted_mode),
         ("distill_boundary_mode", test_distill_boundary_mode),

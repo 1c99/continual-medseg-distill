@@ -2,7 +2,7 @@ method:
   name: distill
   kd:
     mode: logit         # logit | feature | weighted | boundary
-    weight: 0.7
+    weight: 0.1
     temperature: 2.0
     # feature_weight: 1.0       # (feature mode only)
     # boundary_sigma: 1.0       # (boundary mode only)

@@ -1,7 +1,7 @@
 method:
   name: distill_replay_ewc
   kd:
-    weight: 0.5
+    weight: 0.1
     temperature: 2.0
   replay:
     buffer_size: 200

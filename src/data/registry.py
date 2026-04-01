@@ -8,6 +8,7 @@ import yaml
 from torch.utils.data import DataLoader
 
 from .acdc import ACDCDataset
+from .augmentation import AugmentationPipeline, AugmentedDataset
 from .brats21 import Brats21Dataset
 from .synthetic import Synthetic3DSpec, SyntheticSeg3DDataset
 from .totalseg import TotalSegmentatorDataset
@@ -78,7 +79,7 @@ def _load_ids_from_split_manifest(split_manifest: str | Path) -> tuple[list[str]
     return train_ids, val_ids
 
 
-def create_loaders(cfg: Dict) -> Tuple[DataLoader, DataLoader]:
+def create_loaders(cfg: Dict, dist_ctx=None) -> Tuple[DataLoader, DataLoader]:
     data_cfg = cfg.get("data", {})
     train_bs = data_cfg.get("batch_size", 2)
     val_bs = data_cfg.get("val_batch_size", train_bs)
@@ -196,12 +197,34 @@ def create_loaders(cfg: Dict) -> Tuple[DataLoader, DataLoader]:
             "Use data.source=synthetic, totalseg, brats21, or acdc."
         )
 
+    # Wrap training dataset with augmentation if configured
+    aug_cfg = data_cfg.get("augmentation", {})
+    if aug_cfg.get("enabled", False):
+        pipeline = AugmentationPipeline(aug_cfg)
+        train_ds = AugmentedDataset(train_ds, pipeline)
+
     from src.utils.reproducibility import worker_init_fn
+
+    # Use DistributedSampler when DDP is enabled
+    train_sampler = None
+    val_sampler = None
+    if dist_ctx is not None and dist_ctx.enabled:
+        train_sampler = dist_ctx.make_sampler(train_ds, shuffle=True)
+        val_sampler = dist_ctx.make_sampler(val_ds, shuffle=False)
+
     train_loader = DataLoader(
-        train_ds, batch_size=train_bs, shuffle=True, worker_init_fn=worker_init_fn,
+        train_ds, batch_size=train_bs,
+        shuffle=(train_sampler is None),
+        sampler=train_sampler,
+        num_workers=4,
+        worker_init_fn=worker_init_fn,
     )
     val_loader = DataLoader(
-        val_ds, batch_size=val_bs, shuffle=False, worker_init_fn=worker_init_fn,
+        val_ds, batch_size=val_bs,
+        shuffle=False,
+        sampler=val_sampler,
+        num_workers=4,
+        worker_init_fn=worker_init_fn,
     )
     return train_loader, val_loader
 
