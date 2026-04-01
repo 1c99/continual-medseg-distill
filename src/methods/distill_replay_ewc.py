@@ -57,7 +57,10 @@ class DistillReplayEWCMethod(ReplayMethod):
         # Prototype KD config (FIX 3)
         proto_cfg = kd_cfg.get("prototype", {})
         self._proto_kd_weight = float(proto_cfg.get("weight", 0.3))
-        self._proto_temperature = float(proto_cfg.get("temperature", 0.1))
+        # Prototype temperature: higher = softer labels (more class relationship info).
+        # Cosine similarity ∈ [-1,1], with T=0.5 → logits ∈ [-2,2] → soft distribution.
+        # Too low (0.1) → near-hard labels, losing the benefit of soft KD.
+        self._proto_temperature = float(proto_cfg.get("temperature", 0.5))
 
         # Per-step loss component tracking (read by trainer for logging)
         self._last_loss_seg = 0.0
@@ -316,6 +319,13 @@ class DistillReplayEWCMethod(ReplayMethod):
             if has_multi_head and prev_student_task is not None:
                 model.current_task = prev_student_task
 
+            # Interpolate prototype logits to match student spatial resolution
+            if proto_logits.shape[2:] != student_logits.shape[2:]:
+                proto_logits = F.interpolate(
+                    proto_logits, size=student_logits.shape[2:],
+                    mode="trilinear", align_corners=False,
+                )
+
             # Match channels
             s_ch = student_logits.shape[1]
             p_ch = proto_logits.shape[1]
@@ -324,10 +334,12 @@ class DistillReplayEWCMethod(ReplayMethod):
                 student_logits = student_logits[:, :min_ch]
                 proto_logits = proto_logits[:, :min_ch]
 
+            # proto_logits already temperature-scaled in prototype_logits()
+            # Use standard KD temperature on student logits for softer distributions
             T = self.temperature
             proto_kd = F.kl_div(
                 F.log_softmax(student_logits / T, dim=1),
-                F.softmax(proto_logits / T, dim=1),
+                F.softmax(proto_logits, dim=1),  # proto_logits already at right scale
                 reduction="mean",
             ) * (T * T)
 
@@ -350,14 +362,17 @@ class DistillReplayEWCMethod(ReplayMethod):
         if self._reference_loss is None:
             self._reference_loss = base_loss.detach().item()
 
-        # KD loss on CURRENT TASK data (only when teacher exists)
+        # KD loss on CURRENT TASK data
+        # For external teachers: skip current-task KD because the adapter for the
+        # current task is new/weak. GT labels (in CE loss) are strictly better.
+        # KD value comes from REPLAY data where the old-task adapter is pre-trained.
+        # For snapshot teachers: compute normally (teacher = frozen student copy).
         kd = torch.tensor(0.0, device=base_loss.device)
-        if self.teacher.has_model:
+        if self.teacher.has_model and not self.teacher.is_external:
             x = batch["image"].to(base_loss.device)
             student_logits = model(x)
             self.teacher.to(base_loss.device)
             teacher_logits, teacher_gate = self.teacher.forward_with_gate(x)
-            # Match channel dimensions for multi-head setups
             s_ch = student_logits.shape[1]
             t_ch = teacher_logits.shape[1]
             if s_ch != t_ch:
