@@ -1,15 +1,13 @@
-# Task A: Abdominal Organ Segmentation (TotalSegmentator subset)
+# Task A: Abdominal Organ Segmentation (TotalSegmentator)
 #
-# 6 classes: 0=background, 1=liver, 2=spleen, 3=kidney_left, 4=kidney_right, 5=pancreas
+# 15 classes: 0=background, 1-14=organs (see below)
 #
-# These organs are chosen because:
-# - Clinically significant in abdominal CT
-# - Well-represented in TotalSegmentator
-# - No overlap with Task B (muscles)
+# All major abdominal/pelvic organs in TotalSegmentator.
+# No overlap with Task B (muscles).
 
 task:
   id: taskA_organs
-  description: "Abdominal organ segmentation (5 organs)"
+  description: "Abdominal organ segmentation (14 organs)"
 
   classes:
     0: background
@@ -18,16 +16,33 @@ task:
     3: kidney_left
     4: kidney_right
     5: pancreas
+    6: gallbladder
+    7: stomach
+    8: duodenum
+    9: small_bowel
+    10: colon
+    11: esophagus
+    12: adrenal_gland_left
+    13: adrenal_gland_right
+    14: urinary_bladder
 
-  num_classes: 6  # including background
+  num_classes: 15  # including background
 
-  # These map to TotalSegmentator segmentation file names
   organs:
     - liver
     - spleen
     - kidney_left
     - kidney_right
     - pancreas
+    - gallbladder
+    - stomach
+    - duodenum
+    - small_bowel
+    - colon
+    - esophagus
+    - adrenal_gland_left
+    - adrenal_gland_right
+    - urinary_bladder
 
 # Data override: use these organs in the TotalSeg loader
 data:
@@ -39,7 +54,16 @@ data:
       - kidney_left
       - kidney_right
       - pancreas
+      - gallbladder
+      - stomach
+      - duodenum
+      - small_bowel
+      - colon
+      - esophagus
+      - adrenal_gland_left
+      - adrenal_gland_right
+      - urinary_bladder
 
-# Model override: 6 output channels (BG + 5 organs)
+# Model override: 15 output channels (BG + 14 organs)
 model:
-  out_channels: 6
+  out_channels: 15

@@ -1,15 +1,14 @@
 # Continual Learning Sequence: Task A (Organs) → Task B (Muscles)
 #
 # Class-incremental setting on TotalSegmentator:
-# - Task A: 5 abdominal organs (liver, spleen, kidneys, pancreas)
-# - Task B: 5 pelvic muscles (gluteus maximus/medius, iliopsoas)
+# - Task A: 14 abdominal organs
+# - Task B: 10 muscles (gluteus, iliopsoas, autochthon)
 #
 # Both tasks share the same subjects (same CT scans) but different
 # segmentation targets. No class overlap between A and B.
 #
-# Note: Each task independently maps to classes 0-5. The model
-# output head has 6 channels throughout. This is a task-incremental
-# setting where the task identity determines class interpretation.
+# Task A uses classes 0-14 (15 channels), Task B uses classes 0-10 (11 channels).
+# The output head must be managed per-task (class-incremental or multi-head).
 
 task_sequence:
   name: totalseg_organs_muscles_AB
@@ -17,7 +16,7 @@ task_sequence:
 
   tasks:
     - id: taskA_organs
-      description: "Abdominal organ segmentation (5 organs)"
+      description: "Abdominal organ segmentation (14 organs)"
       data:
         source: totalseg
         totalseg:
@@ -27,11 +26,20 @@ task_sequence:
             - kidney_left
             - kidney_right
             - pancreas
+            - gallbladder
+            - stomach
+            - duodenum
+            - small_bowel
+            - colon
+            - esophagus
+            - adrenal_gland_left
+            - adrenal_gland_right
+            - urinary_bladder
       model:
-        out_channels: 6
+        out_channels: 15
 
     - id: taskB_muscles
-      description: "Pelvic muscle segmentation (5 muscles)"
+      description: "Muscle segmentation (10 muscles)"
       data:
         source: totalseg
         totalseg:
@@ -40,6 +48,11 @@ task_sequence:
             - gluteus_maximus_right
             - gluteus_medius_left
             - gluteus_medius_right
+            - gluteus_minimus_left
+            - gluteus_minimus_right
             - iliopsoas_left
+            - iliopsoas_right
+            - autochthon_left
+            - autochthon_right
       model:
-        out_channels: 6
+        out_channels: 11

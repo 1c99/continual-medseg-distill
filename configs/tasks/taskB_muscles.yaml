@@ -1,17 +1,14 @@
-# Task B: Muscle Segmentation (TotalSegmentator subset)
+# Task B: Muscle Segmentation (TotalSegmentator)
 #
-# 6 classes: 0=background, 1=gluteus_maximus_left, 2=gluteus_maximus_right,
-#            3=gluteus_medius_left, 4=gluteus_medius_right, 5=iliopsoas_left
+# 11 classes: 0=background, 1-10=muscles (see below)
 #
-# These muscles are chosen because:
-# - Present in abdominal/pelvic CT (same scan region as Task A organs)
-# - Well-represented in TotalSegmentator
-# - No overlap with Task A (organs) — zero shared class IDs
-# - Clinically relevant for sarcopenia assessment
+# All muscles available in TotalSegmentator.
+# No overlap with Task A (organs).
+# Clinically relevant for sarcopenia and body composition assessment.
 
 task:
   id: taskB_muscles
-  description: "Pelvic muscle segmentation (5 muscles)"
+  description: "Muscle segmentation (10 muscles)"
 
   classes:
     0: background
@@ -19,16 +16,26 @@ task:
     2: gluteus_maximus_right
     3: gluteus_medius_left
     4: gluteus_medius_right
-    5: iliopsoas_left
+    5: gluteus_minimus_left
+    6: gluteus_minimus_right
+    7: iliopsoas_left
+    8: iliopsoas_right
+    9: autochthon_left
+    10: autochthon_right
 
-  num_classes: 6  # including background
+  num_classes: 11  # including background
 
   organs:
     - gluteus_maximus_left
     - gluteus_maximus_right
     - gluteus_medius_left
     - gluteus_medius_right
+    - gluteus_minimus_left
+    - gluteus_minimus_right
     - iliopsoas_left
+    - iliopsoas_right
+    - autochthon_left
+    - autochthon_right
 
 # Data override: use these muscles in the TotalSeg loader
 data:
@@ -39,8 +46,13 @@ data:
       - gluteus_maximus_right
       - gluteus_medius_left
       - gluteus_medius_right
+      - gluteus_minimus_left
+      - gluteus_minimus_right
       - iliopsoas_left
+      - iliopsoas_right
+      - autochthon_left
+      - autochthon_right
 
-# Model override: 6 output channels (BG + 5 muscles)
+# Model override: 11 output channels (BG + 10 muscles)
 model:
-  out_channels: 6
+  out_channels: 11
