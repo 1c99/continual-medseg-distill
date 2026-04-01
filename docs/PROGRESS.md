@@ -4,6 +4,107 @@ This file is updated alongside repository progress so experiment intent and impl
 
 ---
 
+## 2026-03-30 — Method Comparison with Fixed KD (50 epochs)
+
+### Critical Bug Fix (2026-03-29): batchmean -> mean
+
+`F.kl_div(reduction="batchmean")` was causing KD loss ~50,000x too large for 3D volumes.
+Fixed to `reduction="mean"` in `src/methods/distill.py` and `src/methods/distill_replay_ewc.py`.
+
+**DEPRECATED**: All distill-method results from `ablation_full_s42` (distill, distill_replay_ewc,
+distill_replay_ewc_ortholora) are INVALID due to this bug. Finetune and replay baselines from
+that run remain valid.
+
+### KD Weight Sweep (kd_sweep_20ep_s42, 20 epochs)
+
+Swept {0.1, 0.5, 1.0, 5.0, 10.0} with fixed KD. Best weight: **w=0.1** (Dice=0.266 at ep 20).
+w=5.0/10.0 completely failed. All runs still improving at epoch 20.
+
+### Method Comparison (method_comparison_50ep_s42, 50 epochs)
+
+Settings: MedSAM2 teacher, kd_weight=0.1, temp=2.0, logit mode, seed=42.
+Commit: 4e28ee7516d97d5a58d7c2c8b7752c970478d75d
+
+| Method | Task A Peak | Task A Retained | Forgetting | Task B Final | BWT |
+|--------|------------|----------------|------------|-------------|------|
+| finetune (baseline) | 0.330 | 0.000 | 0.330 | 0.747 | -0.330 |
+| replay (baseline) | 0.591 | 0.000 | 0.591 | 0.835 | -0.591 |
+| distill | 0.335 | 0.001 | 0.334 | 0.716 | -0.334 |
+| distill_replay_ewc | 0.608 | 0.000 | 0.608 | **0.819** | -0.608 |
+| distill_replay_ewc_ortholora | 0.017 | 0.001 | 0.016 | 0.002 | -0.016 |
+| lwf | 0.311 | 0.001 | 0.309 | 0.656 | -0.309 |
+
+### Metric Definitions
+
+| Term | Definition | Source |
+|------|-----------|--------|
+| Task A Peak | Best `val_dice_mean` during Task A training (50 ep) | `forgetting.json` → `matrix.taskA_organs.taskA_organs` |
+| Task A Retained | `val_dice_mean` on Task A data after Task B training | `forgetting.json` → `matrix.taskB_muscles.taskA_organs` |
+| Task B Final | `val_dice_mean` on Task B data after Task B training | `forgetting.json` → `matrix.taskB_muscles.taskB_muscles` |
+| Forgetting | Task A Peak − Task A Retained | `forgetting.json` → `per_task.taskA_organs` |
+| BWT | −Forgetting (backward transfer) | `forgetting.json` → `bwt_per_task.taskA_organs` |
+
+**Data sources**: finetune/replay baselines from `ablation_full_s42/`, KD methods from
+`method_comparison_50ep_s42/`. All under `/media/user/data2/data2/data/medseg_outputs/`.
+
+### Metric Provenance (exact values from forgetting.json)
+
+| Method | Source Dir | A Peak (raw) | A Retained (raw) | B Final (raw) |
+|--------|-----------|-------------|------------------|--------------|
+| finetune | ablation_full_s42/finetune | 0.32966 | 0.00000 | 0.74665 |
+| replay | ablation_full_s42/replay | 0.59061 | 0.00000157 | 0.83531 |
+| distill | method_comparison_50ep_s42/distill | 0.33453 | 0.00061 | 0.71624 |
+| distill_replay_ewc | method_comparison_50ep_s42/distill_replay_ewc | 0.60808 | 0.00040 | 0.81855 |
+| distill_replay_ewc_ortholora | method_comparison_50ep_s42/distill_replay_ewc_ortholora | 0.01700 | 0.00117 | 0.00176 |
+| lwf | method_comparison_50ep_s42/lwf | 0.31071 | 0.00144 | 0.65623 |
+
+### CRITICAL: Task A Retention Metrics Are Invalid (Evaluation Artifact)
+
+**Verdict: "Task A Retained ≈ 0" is NOT true forgetting — it is a label-space collision artifact.**
+
+**Root cause**: Both Task A (organs) and Task B (muscles) map their 5 classes to label indices 1-5,
+sharing a single 6-channel output head. After Task B training, the model's output channels encode
+muscle semantics. When evaluated on Task A organ ground truth, `pred == 1` (gluteus_maximus_left)
+is compared against `target == 1` (liver) — zero overlap → Dice ≈ 0 regardless of actual retention.
+
+**Evidence chain:**
+1. `configs/tasks/taskA_organs.yaml` — classes 0-5 = {BG, liver, spleen, kidney_L, kidney_R, pancreas}
+2. `configs/tasks/taskB_muscles.yaml` — classes 0-5 = {BG, glut_max_L, glut_max_R, glut_med_L, glut_med_R, iliopsoas_L}
+3. `src/models/factory.py:23` — single UNet with `out_channels=6`, never expanded between tasks
+4. `src/engine/evaluator.py:35` — `pred = logits.argmax(dim=1)` — no task-aware label remap
+5. `src/utils/metrics.py:124-126` — `pred_c = pred_np == cls; target_c = target_np == cls` — index collision
+6. `src/engine/multi_task_trainer.py:388-391` — cross-task eval passes Task A loader + config to model trained on Task B semantics
+
+**What is valid**: Task A Peak and Task B Final are correct (evaluated during own-task training).
+**What is invalid**: All Task A Retained, Forgetting, and BWT values for every method and every run.
+
+**replay retained = 0.00000157 confirms the artifact** — replay explicitly trains on Task A data
+during Task B, so true retention should be substantial, not zero.
+
+### Key Findings (revised)
+
+1. **Task B learning works correctly** — all methods (except ortholora) learn Task B effectively
+2. **Replay is the dominant factor for Task B** — distill_replay_ewc (0.819) ≈ replay (0.835)
+3. **KD alone does not boost Task B** — distill (0.716) < finetune (0.747)
+4. **LwF underperforms on Task B** — self-distillation (0.656) weakest
+5. **OrthoLoRA prevents learning entirely** — rank=8 + ortho_lambda=0.1 too constrained
+6. **All retention/forgetting metrics are invalid** — label-space collision (see above)
+
+### Next Steps (updated)
+
+1. **Fix evaluation artifact (BLOCKING)** — implement one of:
+   - **(a) Class-incremental head**: expand output to 12 channels (Task A: 0-5, Task B: 6-11), copy weights
+   - **(b) Multi-head**: separate prediction heads per task, select at eval time
+   - **(c) Task-aware evaluator**: pass task→class mapping, remap predictions before metric computation
+   Option (a) is simplest and most standard for continual segmentation literature.
+2. Re-run all methods with fixed evaluation (same configs, just head/eval fix)
+3. Then: sweep KD weight 0.5-2.0 for anti-forgetting
+4. Then: MedSAM2 vs MedSAM3 teacher comparison
+5. Then: tune OrthoLoRA (higher rank, lower ortho_lambda)
+6. Multi-seed runs once best config identified
+
+---
+
 ## 2026-03-27 — Pipeline Validation Sprint (Real Training Runs)
 
 ### Summary
