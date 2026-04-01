@@ -42,18 +42,13 @@ class _OutputAdapter(nn.Module):
     def __init__(self, in_channels: int = 256, out_channels: int = 14, deep: bool = False):
         super().__init__()
         if deep:
-            mid = in_channels
+            # Same ResidualBlock architecture as GRACE deep core
+            from .gated_adapter import ResidualBlock
             self.proj = nn.Sequential(
-                nn.Conv3d(in_channels, mid, kernel_size=3, padding=1),
-                nn.GroupNorm(16, mid),
-                nn.GELU(),
-                nn.Conv3d(mid, mid, kernel_size=3, padding=1),
-                nn.GroupNorm(16, mid),
-                nn.GELU(),
-                nn.Conv3d(mid, mid // 2, kernel_size=3, padding=1),
-                nn.GroupNorm(8, mid // 2),
-                nn.GELU(),
-                nn.Conv3d(mid // 2, out_channels, kernel_size=1),
+                ResidualBlock(in_channels, in_channels),
+                ResidualBlock(in_channels, in_channels),
+                ResidualBlock(in_channels, in_channels // 2),
+                nn.Conv3d(in_channels // 2, out_channels, kernel_size=1),
             )
         else:
             self.proj = nn.Sequential(

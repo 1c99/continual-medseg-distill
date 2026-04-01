@@ -41,18 +41,13 @@ class SliceWiseAdapter(nn.Module):
     ):
         super().__init__()
         if deep:
-            mid = in_channels
+            # Same ResidualBlock2d architecture as SliceWiseGRACEAdapter deep core
+            # Ensures fair comparison: only difference is freeze-vs-rebuild
             self.proj = nn.Sequential(
-                nn.Conv2d(in_channels, mid, 3, padding=1),
-                nn.GroupNorm(16, mid),
-                nn.GELU(),
-                nn.Conv2d(mid, mid, 3, padding=1),
-                nn.GroupNorm(16, mid),
-                nn.GELU(),
-                nn.Conv2d(mid, mid // 2, 3, padding=1),
-                nn.GroupNorm(8, mid // 2),
-                nn.GELU(),
-                nn.Conv2d(mid // 2, out_channels, 1),
+                _ResidualBlock2d(in_channels, in_channels),
+                _ResidualBlock2d(in_channels, in_channels),
+                _ResidualBlock2d(in_channels, in_channels // 2),
+                nn.Conv2d(in_channels // 2, out_channels, 1),
             )
         else:
             self.proj = nn.Sequential(

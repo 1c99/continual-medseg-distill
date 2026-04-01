@@ -40,28 +40,23 @@ _IMG_STD = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
 
 
 class _OutputAdapter(nn.Module):
-    """Projects SAM2 backbone features to dense segmentation logits."""
+    """Projects SAM2 backbone features to dense segmentation logits.
+
+    Uses the same ResidualBlock architecture as GatedResidualAdapter
+    when deep=True, ensuring fair comparison (only difference between
+    standard and GRACE is freeze-vs-rebuild, not architecture).
+    """
 
     def __init__(self, in_channels: int = 256, out_channels: int = 14, deep: bool = False):
         super().__init__()
         if deep:
-            # Deeper adapter with residual connections for higher capacity
-            mid = in_channels
+            # Same ResidualBlock architecture as GRACE deep core + output projection
+            from .gated_adapter import ResidualBlock
             self.proj = nn.Sequential(
-                # Block 1: spatial reasoning
-                nn.Conv3d(in_channels, mid, kernel_size=3, padding=1),
-                nn.GroupNorm(16, mid),
-                nn.GELU(),
-                # Block 2: deeper spatial reasoning
-                nn.Conv3d(mid, mid, kernel_size=3, padding=1),
-                nn.GroupNorm(16, mid),
-                nn.GELU(),
-                # Block 3: channel reduction
-                nn.Conv3d(mid, mid // 2, kernel_size=3, padding=1),
-                nn.GroupNorm(8, mid // 2),
-                nn.GELU(),
-                # Block 4: final projection
-                nn.Conv3d(mid // 2, out_channels, kernel_size=1),
+                ResidualBlock(in_channels, in_channels),
+                ResidualBlock(in_channels, in_channels),
+                ResidualBlock(in_channels, in_channels // 2),
+                nn.Conv3d(in_channels // 2, out_channels, kernel_size=1),
             )
         else:
             self.proj = nn.Sequential(
