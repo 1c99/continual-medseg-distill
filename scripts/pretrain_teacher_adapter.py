@@ -53,9 +53,11 @@ from src.data.registry import create_loaders
 
 def _dicece_loss(logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     """Dice + CE loss matching the student's training loss."""
+    if logits.ndim != 5 or target.ndim != 4:
+        raise ValueError(f"_dicece_loss shape error: logits={logits.shape}, target={target.shape}")
     num_classes = logits.shape[1]
     probs = F.softmax(logits, dim=1)
-    target_one_hot = F.one_hot(target, num_classes).permute(0, -1, *range(1, target.ndim)).float()
+    target_one_hot = F.one_hot(target.long(), num_classes).permute(0, -1, *range(1, target.ndim)).float()
 
     smooth = 1e-5
     dice_loss = 0.0
@@ -199,11 +201,16 @@ def main():
             # Forward: backbone (frozen, no_grad) → adapter (trainable)
             with torch.no_grad():
                 features = backend._extract_features_3d(x)
+                # Force channels-first layout (MedSAM3 may produce channels-last from backbone)
+                if features.stride(1) == 1 and features.ndim == 5:
+                    features = features.to(memory_format=torch.contiguous_format)
 
             B, C_in, D, H, W = x.shape
 
             if is_gated:
                 logits, gate = adapter(features, (D, H, W))
+                if logits.ndim != 5:
+                    raise ValueError(f"GRACE logits wrong dim: {logits.shape}, features={features.shape}, target=({D},{H},{W})")
                 seg_loss = _dicece_loss(logits, y)
 
                 # Gate supervision: gate should be high where prediction is correct

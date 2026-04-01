@@ -149,18 +149,22 @@ class GatedResidualAdapter(nn.Module):
 
         # Task-specific logits
         logits = self.residuals[self.current_task](intermediate)
-        if logits.shape[2:] != target_shape:
+        if tuple(logits.shape[2:]) != tuple(target_shape):
             logits = F.interpolate(
                 logits, size=target_shape, mode="trilinear", align_corners=False
             )
 
         # Confidence gate
         gate_raw = self.gate_head(intermediate)
-        if gate_raw.shape[2:] != target_shape:
+        if tuple(gate_raw.shape[2:]) != tuple(target_shape):
             gate_raw = F.interpolate(
                 gate_raw, size=target_shape, mode="trilinear", align_corners=False
             )
         gate = self.min_gate + (1.0 - self.min_gate) * torch.sigmoid(gate_raw)
+
+        # Ensure batch dimension is preserved
+        assert logits.ndim == 5, f"Expected 5D logits, got {logits.shape}"
+        assert gate.ndim == 5, f"Expected 5D gate, got {gate.shape}"
 
         return logits, gate
 

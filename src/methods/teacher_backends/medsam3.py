@@ -230,15 +230,31 @@ class MedSAM3Backend(TeacherBackend):
 
         adapter_channels = self._cfg.get("adapter_channels", 256)
         deep_adapter = self._cfg.get("deep_adapter", False)
-        self._adapter = _OutputAdapter(
-            in_channels=adapter_channels,
-            out_channels=output_channels,
-            deep=deep_adapter,
-        ).to(device)
+
+        adapter_type = self._cfg.get("adapter_type", "standard")
+        if adapter_type == "gated_residual":
+            from .gated_adapter import GatedResidualAdapter
+            initial_task = self._cfg.get("initial_task_id", "task_0")
+            self._adapter = GatedResidualAdapter(
+                in_channels=adapter_channels,
+                out_channels=output_channels,
+                initial_task_id=initial_task,
+                gate_hidden=self._cfg.get("gate_hidden", 64),
+                min_gate=self._cfg.get("min_gate", 0.1),
+                deep=deep_adapter,
+            ).to(device)
+            self._gated = True
+        else:
+            self._adapter = _OutputAdapter(
+                in_channels=adapter_channels,
+                out_channels=output_channels,
+                deep=deep_adapter,
+            ).to(device)
 
         logger.info(
             f"MedSAM3Backend: loaded from HF (output_channels={output_channels}, "
-            f"lora={'yes' if lora_path else 'no'})"
+            f"lora={'yes' if lora_path else 'no'}, "
+            f"adapter={'gated' if self._gated else ('deep' if deep_adapter else 'standard')})"
         )
 
     def _apply_lora(self, lora_path: str) -> None:
