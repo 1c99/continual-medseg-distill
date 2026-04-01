@@ -40,6 +40,12 @@ class DistillReplayEWCMethod(ReplayMethod):
         self.ewc_weight = float(ewc_cfg.get("weight", 0.1))
         self.fisher_samples = int(ewc_cfg.get("fisher_samples", 64))
 
+        # Adaptive loss scaling: auto-scale EWC and KD relative to task loss
+        # When enabled, weight values become target ratios (e.g., 0.5 = half of task loss)
+        self._adaptive_scaling = bool(mcfg.get("adaptive_scaling", False))
+        self._ewc_target_ratio = float(ewc_cfg.get("target_ratio", 0.5))
+        self._kd_target_ratio = float(kd_cfg.get("target_ratio", 0.3))
+
         # Per-step loss component tracking (read by trainer for logging)
         self._last_loss_seg = 0.0
         self._last_loss_kd = 0.0
@@ -180,7 +186,25 @@ class DistillReplayEWCMethod(ReplayMethod):
             from src.models.ortho_reg import orthogonality_loss
             ortho = orthogonality_loss(model, self.prev_lora_states)
 
-        return base_loss + self.kd_weight * kd + self.ewc_weight * ewc + self._ortho_lambda * ortho
+        if self._adaptive_scaling:
+            # Auto-scale losses relative to task loss magnitude
+            task_mag = base_loss.detach().clamp(min=1e-6)
+
+            if kd.item() > 0:
+                kd_scale = task_mag / kd.detach().clamp(min=1e-8)
+                kd_term = self._kd_target_ratio * kd_scale * kd
+            else:
+                kd_term = kd
+
+            if ewc.item() > 0:
+                ewc_scale = task_mag / ewc.detach().clamp(min=1e-8)
+                ewc_term = self._ewc_target_ratio * ewc_scale * ewc
+            else:
+                ewc_term = ewc
+
+            return base_loss + kd_term + ewc_term + self._ortho_lambda * ortho
+        else:
+            return base_loss + self.kd_weight * kd + self.ewc_weight * ewc + self._ortho_lambda * ortho
 
     def set_task_output_channels(self, out_channels: int, task_id: str | None = None) -> None:
         """Reconfigure teacher adapter for the current task's output channels."""

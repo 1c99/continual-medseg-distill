@@ -159,6 +159,7 @@ class MedSAM3Backend(TeacherBackend):
         deep_adapter = self._cfg.get("deep_adapter", False)
 
         adapter_type = self._cfg.get("adapter_type", "standard")
+        deep_adapter = self._cfg.get("deep_adapter", False)
         if adapter_type == "gated_residual":
             from .gated_adapter import GatedResidualAdapter
             initial_task = self._cfg.get("initial_task_id", "task_0")
@@ -168,6 +169,7 @@ class MedSAM3Backend(TeacherBackend):
                 initial_task_id=initial_task,
                 gate_hidden=self._cfg.get("gate_hidden", 64),
                 min_gate=self._cfg.get("min_gate", 0.1),
+                deep=deep_adapter,
             ).to(device)
             self._gated = True
         else:

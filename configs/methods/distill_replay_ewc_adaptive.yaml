@@ -1,0 +1,20 @@
+# Distill + Replay + EWC with adaptive loss scaling
+# Auto-scales EWC and KD losses relative to task loss magnitude.
+# target_ratio = 0.5 means that loss component will be ~50% of task loss.
+
+method:
+  name: distill_replay_ewc
+  adaptive_scaling: true
+  kd:
+    weight: 0.7           # fallback if adaptive_scaling is false
+    temperature: 2.0
+    target_ratio: 0.3     # KD = 30% of task loss (adaptive)
+    teacher:
+      type: snapshot
+  replay:
+    buffer_size: 500
+    weight: 1.0
+  ewc:
+    weight: 0.2           # fallback if adaptive_scaling is false
+    target_ratio: 0.5     # EWC = 50% of task loss (adaptive)
+    fisher_samples: 64

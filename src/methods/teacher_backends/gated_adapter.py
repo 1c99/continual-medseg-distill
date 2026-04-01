@@ -32,6 +32,47 @@ import torch.nn.functional as F
 logger = logging.getLogger(__name__)
 
 
+class ResidualBlock(nn.Module):
+    """Conv3d block with skip connection and optional channel change."""
+
+    def __init__(self, in_ch: int, out_ch: int):
+        super().__init__()
+        self.conv1 = nn.Conv3d(in_ch, out_ch, kernel_size=3, padding=1)
+        self.gn1 = nn.GroupNorm(min(16, out_ch), out_ch)
+        self.conv2 = nn.Conv3d(out_ch, out_ch, kernel_size=3, padding=1)
+        self.gn2 = nn.GroupNorm(min(16, out_ch), out_ch)
+        self.act = nn.GELU()
+
+        # Skip connection with 1x1 conv if channels change
+        self.skip = (
+            nn.Conv3d(in_ch, out_ch, kernel_size=1)
+            if in_ch != out_ch
+            else nn.Identity()
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        identity = self.skip(x)
+        out = self.act(self.gn1(self.conv1(x)))
+        out = self.gn2(self.conv2(out))
+        return self.act(out + identity)
+
+
+def _build_core(in_channels: int, deep: bool = False) -> nn.Module:
+    """Build the shared core with optional depth and skip connections."""
+    if deep:
+        return nn.Sequential(
+            ResidualBlock(in_channels, in_channels),
+            ResidualBlock(in_channels, in_channels),
+            ResidualBlock(in_channels, in_channels // 2),
+        )
+    else:
+        return nn.Sequential(
+            nn.Conv3d(in_channels, in_channels, kernel_size=3, padding=1),
+            nn.GroupNorm(16, in_channels),
+            nn.GELU(),
+        )
+
+
 class GatedResidualAdapter(nn.Module):
     """Unified adapter combining TRA + CGAD + CPA for continual KD.
 
@@ -51,31 +92,37 @@ class GatedResidualAdapter(nn.Module):
         initial_task_id: str = "task_0",
         gate_hidden: int = 64,
         min_gate: float = 0.1,
+        deep: bool = False,
     ):
         super().__init__()
         self.in_channels = in_channels
         self.min_gate = min_gate
+        self._deep = deep
 
         # ---- TRA: Shared core (frozen after first task) ----
-        self.core = nn.Sequential(
-            nn.Conv3d(in_channels, in_channels, kernel_size=3, padding=1),
-            nn.GroupNorm(16, in_channels),
-            nn.GELU(),
-        )
+        self.core = _build_core(in_channels, deep=deep)
         self._core_frozen = False
+
+        # Core output channels (deep mode halves channels in last block)
+        self._core_out = in_channels // 2 if deep else in_channels
 
         # ---- TRA: Per-task residual projections ----
         self.residuals = nn.ModuleDict({
-            initial_task_id: nn.Conv3d(in_channels, out_channels, kernel_size=1),
+            initial_task_id: nn.Conv3d(self._core_out, out_channels, kernel_size=1),
         })
         self.current_task: str = initial_task_id
         self._task_channels: Dict[str, int] = {initial_task_id: out_channels}
 
         # ---- CGAD: Confidence gate ----
         self.gate_head = nn.Sequential(
-            nn.Conv3d(in_channels, gate_hidden, kernel_size=3, padding=1),
+            nn.Conv3d(self._core_out, gate_hidden, kernel_size=3, padding=1),
             nn.GELU(),
             nn.Conv3d(gate_hidden, 1, kernel_size=1),
+        )
+
+        logger.info(
+            f"GatedResidualAdapter: {'deep' if deep else 'shallow'} core, "
+            f"core_out={self._core_out}, gate_hidden={gate_hidden}"
         )
 
         # ---- CPA: Prototype bank ----
@@ -138,7 +185,7 @@ class GatedResidualAdapter(nn.Module):
         if task_id in self.residuals:
             return
         self.residuals[task_id] = nn.Conv3d(
-            self.in_channels, out_channels, kernel_size=1
+            self._core_out, out_channels, kernel_size=1
         )
         self._task_channels[task_id] = out_channels
         # Move to same device as core
