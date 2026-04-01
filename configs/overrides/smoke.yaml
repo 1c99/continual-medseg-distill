@@ -1,0 +1,4 @@
+# Smoke run overrides: short training for pipeline validation
+train:
+  epochs: 5
+  max_steps_per_epoch: 20

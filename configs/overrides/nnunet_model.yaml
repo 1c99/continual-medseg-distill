@@ -1,0 +1,8 @@
+# Override to use nnU-Net (PlainConvUNet) as the student model
+model:
+  name: nnunet
+  in_channels: 1
+  n_stages: 5
+  features_per_stage: [32, 64, 128, 256, 512]
+  n_conv_per_stage: [2, 2, 2, 2, 2]
+  n_conv_per_stage_decoder: [2, 2, 2, 2]

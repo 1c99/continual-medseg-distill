@@ -1,0 +1,10 @@
+# TotalSegmentator dataset config (data paths only, no model/train overrides)
+# Organs and out_channels are set by task configs, not here.
+data:
+  source: totalseg
+  batch_size: 2
+  val_batch_size: 2
+  totalseg:
+    root: /media/user/data2/data2/data/Totalsegmentator_dataset
+    shape: [64, 64, 64]
+    split_manifest: data/splits/totalseg_train_clean_v1.json

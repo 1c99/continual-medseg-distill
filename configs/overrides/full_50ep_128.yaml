@@ -1,0 +1,13 @@
+# Full training at 128³: 50 epochs, 100 steps/epoch, larger replay buffer
+train:
+  epochs: 50
+  lr: 0.001
+  max_steps_per_epoch: 100
+  loss_type: dicece
+
+method:
+  replay:
+    buffer_size: 500
+
+experiment:
+  seed: 42

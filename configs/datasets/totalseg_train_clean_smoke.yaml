@@ -1,0 +1,21 @@
+# TotalSegmentator clean training config — smoke test (5 epochs, 20 steps)
+# Corrupt subject s0864 excluded
+data:
+  source: totalseg
+  batch_size: 2
+  val_batch_size: 2
+  totalseg:
+    root: /media/user/data2/data2/data/Totalsegmentator_dataset
+    organ: liver
+    shape: [128, 128, 128]
+    split_manifest: data/splits/totalseg_train_clean_v1.json
+
+model:
+  in_channels: 1
+  out_channels: 2
+
+train:
+  epochs: 5
+  lr: 0.001
+  max_steps_per_epoch: 20
+  loss_type: dicece

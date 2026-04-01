@@ -1,0 +1,9 @@
+# Full training: 50 epochs, 100 steps/epoch
+train:
+  epochs: 50
+  lr: 0.001
+  max_steps_per_epoch: 100
+  loss_type: dicece
+
+experiment:
+  seed: 42

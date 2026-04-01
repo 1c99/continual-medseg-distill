@@ -1,0 +1,6 @@
+# Quick validation: 5 epochs, 20 steps/epoch
+train:
+  epochs: 5
+  lr: 0.001
+  max_steps_per_epoch: 20
+  loss_type: dicece
