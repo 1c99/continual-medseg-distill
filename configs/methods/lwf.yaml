@@ -1,0 +1,8 @@
+method:
+  name: lwf
+  kd:
+    mode: logit
+    weight: 0.1
+    temperature: 2.0
+    teacher:
+      type: snapshot

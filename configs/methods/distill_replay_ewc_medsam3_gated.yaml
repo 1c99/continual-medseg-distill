@@ -1,0 +1,26 @@
+# Distill + Replay + EWC with MedSAM3 + Gated Residual Adapter (TRA + CGAD + CPA)
+# Usage: --method-config configs/methods/distill_replay_ewc_medsam3_gated.yaml
+
+method:
+  name: distill_replay_ewc
+  kd:
+    weight: 0.7
+    temperature: 2.0
+    teacher:
+      type: medsam3
+      ckpt_path: auto
+      model_id: medsam3_gated_teacher
+      output_channels: 15
+      adapter_channels: 256
+      adapter_type: gated_residual
+      initial_task_id: taskA_organs
+      gate_hidden: 64
+      min_gate: 0.1
+      adapter_ckpt_path: checkpoints/medsam3_gated_adapter_taskA.pt
+      lora_path: checkpoints/medsam3_lora.pt
+  replay:
+    buffer_size: 200
+    weight: 1.0
+  ewc:
+    weight: 0.2
+    fisher_samples: 64

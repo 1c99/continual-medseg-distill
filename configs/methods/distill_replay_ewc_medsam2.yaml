@@ -1,0 +1,22 @@
+# Distill + Replay + EWC with MedSAM2 external teacher
+# Usage: --method-config configs/methods/distill_replay_ewc_medsam2.yaml
+
+method:
+  name: distill_replay_ewc
+  kd:
+    weight: 0.7
+    temperature: 2.0
+    teacher:
+      type: medsam2
+      ckpt_path: third_party/medsam2/checkpoints/MedSAM2_latest.pt
+      config_file: configs/sam2.1_hiera_t512.yaml
+      model_id: medsam2_teacher
+      output_channels: 15    # initial (Task A); reconfigured per task automatically
+      adapter_channels: 256
+      adapter_ckpt_path: checkpoints/medsam2_adapter_taskA.pt  # pre-trained via pretrain_teacher_adapter.py
+  replay:
+    buffer_size: 200
+    weight: 1.0
+  ewc:
+    weight: 0.2
+    fisher_samples: 64

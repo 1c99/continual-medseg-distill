@@ -1,0 +1,24 @@
+# Distill + Replay + EWC with MedSAM3 external teacher
+# Usage: --method-config configs/methods/distill_replay_ewc_medsam3.yaml
+#
+# Requires: third_party/medsam3/ cloned + checkpoint
+
+method:
+  name: distill_replay_ewc
+  kd:
+    weight: 0.7
+    temperature: 2.0
+    teacher:
+      type: medsam3
+      ckpt_path: auto                              # download base SAM3 from HuggingFace
+      model_id: medsam3_teacher
+      output_channels: 15    # initial (Task A); reconfigured per task automatically
+      adapter_channels: 256
+      adapter_ckpt_path: checkpoints/medsam3_adapter_taskA.pt  # pre-trained via pretrain_teacher_adapter.py
+      lora_path: checkpoints/medsam3_lora.pt       # MedSAM3 LoRA fine-tuning weights
+  replay:
+    buffer_size: 200
+    weight: 1.0
+  ewc:
+    weight: 0.2
+    fisher_samples: 64

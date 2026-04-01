@@ -11,7 +11,7 @@ runtime:
 model:
   name: monai_unet
   in_channels: 1
-  out_channels: 6          # BG + 5 classes per task
+  out_channels: 15         # Task A: BG + 14 organs (reconfigured per task by multi-head)
   channels: [16, 32, 64, 128]
   strides: [2, 2, 2]
   num_res_units: 2
@@ -29,7 +29,7 @@ method:
       ckpt_path: third_party/medsam2/checkpoints/MedSAM2_latest.pt
       config_file: configs/sam2.1_hiera_t512.yaml
       model_id: medsam2_continual
-      output_channels: 6
+      output_channels: 15   # initial (Task A); reconfigured per task automatically
 
 data:
   source: totalseg

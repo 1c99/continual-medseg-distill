@@ -1,0 +1,31 @@
+# Distill + Replay + EWC with MedSAM2 + Gated Residual Adapter (TRA + CGAD + CPA)
+# Usage: --method-config configs/methods/distill_replay_ewc_medsam2_gated.yaml
+#
+# Novel adapter combining:
+#   - Task-Residual Adapter (TRA): frozen shared core + per-task residual
+#   - Confidence-Gated Distillation (CGAD): learned per-voxel gate
+#   - Continual Prototype Adapter (CPA): append-only class prototypes
+
+method:
+  name: distill_replay_ewc
+  kd:
+    weight: 0.7
+    temperature: 2.0
+    teacher:
+      type: medsam2
+      ckpt_path: third_party/medsam2/checkpoints/MedSAM2_latest.pt
+      config_file: configs/sam2.1_hiera_t512.yaml
+      model_id: medsam2_gated_teacher
+      output_channels: 15
+      adapter_channels: 256
+      adapter_type: gated_residual
+      initial_task_id: taskA_organs
+      gate_hidden: 64
+      min_gate: 0.1
+      adapter_ckpt_path: checkpoints/medsam2_gated_adapter_taskA.pt
+  replay:
+    buffer_size: 200
+    weight: 1.0
+  ewc:
+    weight: 0.2
+    fisher_samples: 64

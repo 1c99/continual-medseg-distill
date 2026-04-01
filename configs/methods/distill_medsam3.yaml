@@ -19,8 +19,9 @@ method:
       enabled: false
     teacher:
       type: medsam3
-      ckpt_path: checkpoints/medsam3_teacher.pt   # UPDATE to actual path
+      ckpt_path: auto                              # download base SAM3 from HuggingFace
       model_id: medsam3_pretrained
-      output_channels: 14                          # must match student out_channels
+      output_channels: 15                          # initial (Task A); reconfigured per task automatically
       adapter_channels: 256                        # backbone feature dim
-      # lora_path: checkpoints/medsam3_lora.pt    # optional separate LoRA weights
+      adapter_ckpt_path: checkpoints/medsam3_adapter_taskA.pt  # pre-trained via pretrain_teacher_adapter.py
+      lora_path: checkpoints/medsam3_lora.pt       # MedSAM3 LoRA fine-tuning weights
