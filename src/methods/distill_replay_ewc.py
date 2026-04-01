@@ -40,6 +40,10 @@ class DistillReplayEWCMethod(ReplayMethod):
         self.ewc_weight = float(ewc_cfg.get("weight", 0.1))
         self.fisher_samples = int(ewc_cfg.get("fisher_samples", 64))
 
+        # Per-step loss component tracking (read by trainer for logging)
+        self._last_loss_seg = 0.0
+        self._last_loss_kd = 0.0
+
         teacher_cfg = kd_cfg.get("teacher", {})
         self.teacher = Teacher(teacher_cfg=teacher_cfg, global_cfg=cfg)
 
@@ -138,13 +142,31 @@ class DistillReplayEWCMethod(ReplayMethod):
             x = batch["image"].to(base_loss.device)
             student_logits = model(x)
             self.teacher.to(base_loss.device)
-            teacher_logits = self.teacher(x)
+            teacher_logits, teacher_gate = self.teacher.forward_with_gate(x)
+            # Match channel dimensions for multi-head setups
+            s_ch = student_logits.shape[1]
+            t_ch = teacher_logits.shape[1]
+            if s_ch != t_ch:
+                min_ch = min(s_ch, t_ch)
+                student_logits = student_logits[:, :min_ch]
+                teacher_logits = teacher_logits[:, :min_ch]
             T = self.temperature
-            kd = F.kl_div(
-                F.log_softmax(student_logits / T, dim=1),
-                F.softmax(teacher_logits / T, dim=1),
-                reduction="batchmean",
-            ) * (T * T)
+            if teacher_gate is not None:
+                kl_per_voxel = F.kl_div(
+                    F.log_softmax(student_logits / T, dim=1),
+                    F.softmax(teacher_logits / T, dim=1),
+                    reduction="none",
+                )
+                kd = (teacher_gate * kl_per_voxel).mean() * (T * T)
+            else:
+                kd = F.kl_div(
+                    F.log_softmax(student_logits / T, dim=1),
+                    F.softmax(teacher_logits / T, dim=1),
+                    reduction="mean",
+                ) * (T * T)
+
+        self._last_loss_seg = float(base_loss.item())
+        self._last_loss_kd = float(kd.item())
 
         ewc = self._ewc_penalty(model, base_loss.device)
 
@@ -159,6 +181,11 @@ class DistillReplayEWCMethod(ReplayMethod):
             ortho = orthogonality_loss(model, self.prev_lora_states)
 
         return base_loss + self.kd_weight * kd + self.ewc_weight * ewc + self._ortho_lambda * ortho
+
+    def set_task_output_channels(self, out_channels: int, task_id: str | None = None) -> None:
+        """Reconfigure teacher adapter for the current task's output channels."""
+        if self.teacher.is_external:
+            self.teacher.reconfigure_adapter(out_channels, task_id=task_id)
 
     def post_task_update(self, model: nn.Module, **kwargs) -> None:
         # Teacher snapshot (skip for external teachers like SAM3/MedSAM3)
@@ -193,7 +220,8 @@ class DistillReplayEWCMethod(ReplayMethod):
             "fisher": self.fisher,
             "prev_params": self.prev_params,
             "memory": [
-                {"image": m["image"], "label": m["label"]} for m in self.memory
+                {k: v for k, v in m.items()}
+                for m in self.memory
             ],
             "prev_lora_states": self.prev_lora_states,
         }
