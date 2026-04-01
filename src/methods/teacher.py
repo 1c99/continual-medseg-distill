@@ -121,6 +121,63 @@ class Teacher:
         """
         self._backend.reconfigure_adapter(out_channels, task_id=task_id)
 
+    @property
+    def backend(self):
+        """Direct access to the underlying backend (for replay KD head switching)."""
+        return self._backend
+
+    def switch_adapter_task(self, task_id: str) -> str | None:
+        """Switch the gated adapter to a specific task, returning the previous task ID.
+
+        Returns None if the backend does not support task switching.
+        """
+        backend = self._backend
+        if not (hasattr(backend, "_gated") and backend._gated):
+            return None
+        adapter = getattr(backend, "_adapter", None)
+        if adapter is None or not hasattr(adapter, "current_task"):
+            return None
+        if task_id not in adapter.residuals:
+            return None
+        prev = adapter.current_task
+        adapter.current_task = task_id
+        return prev
+
+    def restore_adapter_task(self, task_id: str | None) -> None:
+        """Restore the gated adapter to a previous task ID."""
+        if task_id is None:
+            return
+        backend = self._backend
+        adapter = getattr(backend, "_adapter", None)
+        if adapter is not None and hasattr(adapter, "current_task"):
+            adapter.current_task = task_id
+
+    def extract_features(self, x: torch.Tensor) -> torch.Tensor | None:
+        """Extract backbone features (for prototype KD).
+
+        Returns the 3D feature volume or None if not supported.
+        """
+        if hasattr(self._backend, "_extract_features_3d"):
+            with torch.no_grad():
+                return self._backend._extract_features_3d(x)
+        return None
+
+    def get_prototype_logits(
+        self,
+        features: torch.Tensor,
+        task_id: str,
+        num_classes: int,
+        temperature: float = 0.1,
+    ) -> torch.Tensor | None:
+        """Compute prototype soft labels from stored CPA prototypes.
+
+        Returns None if the adapter has no prototypes for this task.
+        """
+        adapter = getattr(self._backend, "_adapter", None)
+        if adapter is None or not hasattr(adapter, "prototype_logits"):
+            return None
+        return adapter.prototype_logits(features, task_id, num_classes, temperature)
+
     def forward_with_gate(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Forward pass returning (logits, gate). Gate is None for non-gated backends."""
         if hasattr(self._backend, "forward_with_gate"):

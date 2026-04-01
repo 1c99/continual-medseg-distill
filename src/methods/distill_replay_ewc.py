@@ -3,6 +3,9 @@
 Inherits replay buffer from ReplayMethod and adds:
 - Teacher-based knowledge distillation (via Teacher abstraction)
 - Elastic Weight Consolidation with diagonal Fisher estimation
+- Replay-aware KD with teacher head switching (FIX 1)
+- Fixed adaptive EWC with reference loss anchoring (FIX 2)
+- Prototype KD for replay anti-forgetting (FIX 3)
 """
 from __future__ import annotations
 
@@ -45,6 +48,16 @@ class DistillReplayEWCMethod(ReplayMethod):
         self._adaptive_scaling = bool(mcfg.get("adaptive_scaling", False))
         self._ewc_target_ratio = float(ewc_cfg.get("target_ratio", 0.5))
         self._kd_target_ratio = float(kd_cfg.get("target_ratio", 0.3))
+
+        # FIX 2: Reference loss for stable adaptive EWC scaling.
+        # Anchored at the start of each task so EWC protection does not
+        # decay as the task loss decreases during training.
+        self._reference_loss: float | None = None
+
+        # Prototype KD config (FIX 3)
+        proto_cfg = kd_cfg.get("prototype", {})
+        self._proto_kd_weight = float(proto_cfg.get("weight", 0.3))
+        self._proto_temperature = float(proto_cfg.get("temperature", 0.1))
 
         # Per-step loss component tracking (read by trainer for logging)
         self._last_loss_seg = 0.0
@@ -136,13 +149,208 @@ class DistillReplayEWCMethod(ReplayMethod):
                 ).sum()
         return penalty
 
+    # ------------------------------------------------------------------
+    # FIX 1: Replay-aware KD with teacher head switching
+    # ------------------------------------------------------------------
+
+    def _compute_replay_kd(
+        self,
+        model: nn.Module,
+        replay: Dict,
+        device: str,
+    ) -> torch.Tensor:
+        """Compute KD loss on replay data, switching the teacher adapter
+        to each replay task's head.
+
+        For gated adapters (GRACE), sets ``adapter.current_task`` to the
+        replay task's ID before computing teacher logits, then restores.
+        """
+        if not self.teacher.has_model or not self.teacher.is_external:
+            return torch.tensor(0.0, device=device)
+
+        xr = replay["image"].to(device)
+        task_ids = replay.get("task_ids", [None] * xr.shape[0])
+        unique_tasks = set(t for t in task_ids if t is not None)
+
+        if not unique_tasks:
+            return torch.tensor(0.0, device=device)
+
+        backend = self.teacher._backend
+        has_gated_adapter = hasattr(backend, "_gated") and backend._gated
+        adapter = getattr(backend, "_adapter", None)
+
+        total_kd = torch.tensor(0.0, device=device)
+        count = 0
+
+        for task_id in unique_tasks:
+            mask = [i for i, t in enumerate(task_ids) if t == task_id]
+            xr_task = xr[mask]
+
+            # Switch teacher adapter to replay task
+            prev_teacher_task = None
+            if has_gated_adapter and adapter is not None:
+                prev_teacher_task = adapter.current_task
+                if task_id in adapter.residuals:
+                    adapter.current_task = task_id
+                else:
+                    # No adapter for this task — skip
+                    continue
+
+            # Switch student head for replay task
+            has_multi_head = hasattr(model, "current_task")
+            prev_student_task = None
+            if has_multi_head:
+                prev_student_task = model.current_task
+                model.current_task = task_id
+
+            # Compute teacher and student logits
+            with torch.no_grad():
+                self.teacher.to(device)
+                teacher_logits, teacher_gate = self.teacher.forward_with_gate(xr_task)
+            student_logits = model(xr_task)
+
+            # Match channels
+            s_ch = student_logits.shape[1]
+            t_ch = teacher_logits.shape[1]
+            if s_ch != t_ch:
+                min_ch = min(s_ch, t_ch)
+                student_logits = student_logits[:, :min_ch]
+                teacher_logits = teacher_logits[:, :min_ch]
+
+            T = self.temperature
+            if teacher_gate is not None:
+                kl_per_voxel = F.kl_div(
+                    F.log_softmax(student_logits / T, dim=1),
+                    F.softmax(teacher_logits / T, dim=1),
+                    reduction="none",
+                )
+                kd = (teacher_gate * kl_per_voxel).mean() * (T * T)
+            else:
+                kd = F.kl_div(
+                    F.log_softmax(student_logits / T, dim=1),
+                    F.softmax(teacher_logits / T, dim=1),
+                    reduction="mean",
+                ) * (T * T)
+
+            total_kd = total_kd + kd
+            count += 1
+
+            # Restore teacher adapter
+            if has_gated_adapter and adapter is not None and prev_teacher_task is not None:
+                adapter.current_task = prev_teacher_task
+
+            # Restore student head
+            if has_multi_head and prev_student_task is not None:
+                model.current_task = prev_student_task
+
+        return total_kd / max(count, 1)
+
+    # ------------------------------------------------------------------
+    # FIX 3: Prototype KD for replay anti-forgetting
+    # ------------------------------------------------------------------
+
+    def _compute_prototype_kd(
+        self,
+        model: nn.Module,
+        replay: Dict,
+        device: str,
+    ) -> torch.Tensor:
+        """Compute prototype-based KD loss on replay data.
+
+        Uses stored CPA prototypes to generate soft labels for replay
+        samples, providing an auxiliary anti-forgetting signal that is
+        independent of the teacher's current adapter state.
+        """
+        if not self.teacher.is_external:
+            return torch.tensor(0.0, device=device)
+
+        backend = self.teacher._backend
+        adapter = getattr(backend, "_adapter", None)
+        if adapter is None or not hasattr(adapter, "prototype_logits"):
+            return torch.tensor(0.0, device=device)
+
+        if adapter.num_prototypes == 0:
+            return torch.tensor(0.0, device=device)
+
+        xr = replay["image"].to(device)
+        task_ids = replay.get("task_ids", [None] * xr.shape[0])
+        unique_tasks = set(t for t in task_ids if t is not None)
+
+        if not unique_tasks:
+            return torch.tensor(0.0, device=device)
+
+        total_proto_kd = torch.tensor(0.0, device=device)
+        count = 0
+
+        for task_id in unique_tasks:
+            mask = [i for i, t in enumerate(task_ids) if t == task_id]
+            xr_task = xr[mask]
+
+            # Get task's output channels from adapter
+            task_channels = adapter._task_channels.get(task_id)
+            if task_channels is None:
+                continue
+
+            # Extract backbone features for replay samples
+            with torch.no_grad():
+                self.teacher.to(device)
+                features = backend._extract_features_3d(xr_task)
+
+            # Get prototype soft labels
+            proto_logits = adapter.prototype_logits(
+                features, task_id, task_channels, self._proto_temperature
+            )
+            if proto_logits is None:
+                continue
+
+            # Switch student head for this task
+            has_multi_head = hasattr(model, "current_task")
+            prev_student_task = None
+            if has_multi_head:
+                prev_student_task = model.current_task
+                model.current_task = task_id
+
+            student_logits = model(xr_task)
+
+            # Restore student head
+            if has_multi_head and prev_student_task is not None:
+                model.current_task = prev_student_task
+
+            # Match channels
+            s_ch = student_logits.shape[1]
+            p_ch = proto_logits.shape[1]
+            if s_ch != p_ch:
+                min_ch = min(s_ch, p_ch)
+                student_logits = student_logits[:, :min_ch]
+                proto_logits = proto_logits[:, :min_ch]
+
+            T = self.temperature
+            proto_kd = F.kl_div(
+                F.log_softmax(student_logits / T, dim=1),
+                F.softmax(proto_logits / T, dim=1),
+                reduction="mean",
+            ) * (T * T)
+
+            total_proto_kd = total_proto_kd + proto_kd
+            count += 1
+
+        return total_proto_kd / max(count, 1)
+
+    # ------------------------------------------------------------------
+    # Training loss (combines all components)
+    # ------------------------------------------------------------------
+
     def training_loss(
         self, model: nn.Module, batch: Dict, device: str
     ) -> torch.Tensor:
         # base CE + replay from ReplayMethod
         base_loss = super().training_loss(model, batch, device)
 
-        # KD loss (only when teacher exists)
+        # FIX 2: Anchor reference loss at first step of each task
+        if self._reference_loss is None:
+            self._reference_loss = base_loss.detach().item()
+
+        # KD loss on CURRENT TASK data (only when teacher exists)
         kd = torch.tensor(0.0, device=base_loss.device)
         if self.teacher.has_model:
             x = batch["image"].to(base_loss.device)
@@ -171,8 +379,17 @@ class DistillReplayEWCMethod(ReplayMethod):
                     reduction="mean",
                 ) * (T * T)
 
+        # FIX 1: KD on REPLAY data with teacher head switching
+        replay_kd = torch.tensor(0.0, device=base_loss.device)
+        proto_kd = torch.tensor(0.0, device=base_loss.device)
+        replay = self._sample_memory(k=batch["image"].shape[0])
+        if replay is not None and self.teacher.has_model:
+            replay_kd = self._compute_replay_kd(model, replay, str(base_loss.device))
+            # FIX 3: Prototype KD on replay data
+            proto_kd = self._compute_prototype_kd(model, replay, str(base_loss.device))
+
         self._last_loss_seg = float(base_loss.item())
-        self._last_loss_kd = float(kd.item())
+        self._last_loss_kd = float(kd.item() + replay_kd.item() + proto_kd.item())
 
         ewc = self._ewc_penalty(model, base_loss.device)
 
@@ -187,24 +404,49 @@ class DistillReplayEWCMethod(ReplayMethod):
             ortho = orthogonality_loss(model, self.prev_lora_states)
 
         if self._adaptive_scaling:
-            # Auto-scale losses relative to task loss magnitude
-            task_mag = base_loss.detach().clamp(min=1e-6)
+            # FIX 2: Use reference loss (anchored at task start) instead of
+            # the current batch's base_loss for stable adaptive scaling.
+            ref_loss = max(self._reference_loss, 1e-6)
 
             if kd.item() > 0:
-                kd_scale = task_mag / kd.detach().clamp(min=1e-8)
+                kd_scale = ref_loss / kd.detach().clamp(min=1e-8)
                 kd_term = self._kd_target_ratio * kd_scale * kd
             else:
                 kd_term = kd
 
             if ewc.item() > 0:
-                ewc_scale = task_mag / ewc.detach().clamp(min=1e-8)
+                ewc_scale = ref_loss / ewc.detach().clamp(min=1e-8)
                 ewc_term = self._ewc_target_ratio * ewc_scale * ewc
             else:
                 ewc_term = ewc
 
-            return base_loss + kd_term + ewc_term + self._ortho_lambda * ortho
+            # Replay KD and prototype KD use the same scaling as current-task KD
+            if replay_kd.item() > 0:
+                rkd_scale = ref_loss / replay_kd.detach().clamp(min=1e-8)
+                replay_kd_term = self._kd_target_ratio * rkd_scale * replay_kd
+            else:
+                replay_kd_term = replay_kd
+
+            if proto_kd.item() > 0:
+                pkd_scale = ref_loss / proto_kd.detach().clamp(min=1e-8)
+                proto_kd_term = self._proto_kd_weight * pkd_scale * proto_kd
+            else:
+                proto_kd_term = proto_kd
+
+            return (
+                base_loss + kd_term + ewc_term
+                + replay_kd_term + proto_kd_term
+                + self._ortho_lambda * ortho
+            )
         else:
-            return base_loss + self.kd_weight * kd + self.ewc_weight * ewc + self._ortho_lambda * ortho
+            return (
+                base_loss
+                + self.kd_weight * kd
+                + self.kd_weight * replay_kd
+                + self._proto_kd_weight * proto_kd
+                + self.ewc_weight * ewc
+                + self._ortho_lambda * ortho
+            )
 
     def set_task_output_channels(self, out_channels: int, task_id: str | None = None) -> None:
         """Reconfigure teacher adapter for the current task's output channels."""
@@ -212,6 +454,9 @@ class DistillReplayEWCMethod(ReplayMethod):
             self.teacher.reconfigure_adapter(out_channels, task_id=task_id)
 
     def post_task_update(self, model: nn.Module, **kwargs) -> None:
+        # FIX 2: Reset reference loss for the next task
+        self._reference_loss = None
+
         # Teacher snapshot (skip for external teachers like SAM3/MedSAM3)
         if not self.teacher.is_external:
             self.teacher.snapshot(model)
@@ -248,6 +493,7 @@ class DistillReplayEWCMethod(ReplayMethod):
                 for m in self.memory
             ],
             "prev_lora_states": self.prev_lora_states,
+            "_reference_loss": self._reference_loss,
         }
         state.update(self.teacher.state_dict())
         torch.save(state, path)
@@ -258,4 +504,5 @@ class DistillReplayEWCMethod(ReplayMethod):
         self.prev_params = state.get("prev_params", {})
         self.memory = state.get("memory", [])
         self.prev_lora_states = state.get("prev_lora_states", [])
+        self._reference_loss = state.get("_reference_loss", None)
         self.teacher.load_state_dict(state, model_template=model_template)

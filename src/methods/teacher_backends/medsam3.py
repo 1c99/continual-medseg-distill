@@ -159,26 +159,12 @@ class MedSAM3Backend(TeacherBackend):
         deep_adapter = self._cfg.get("deep_adapter", False)
 
         adapter_type = self._cfg.get("adapter_type", "standard")
-        deep_adapter = self._cfg.get("deep_adapter", False)
-        if adapter_type == "gated_residual":
-            from .gated_adapter import GatedResidualAdapter
-            initial_task = self._cfg.get("initial_task_id", "task_0")
-            self._adapter = GatedResidualAdapter(
-                in_channels=adapter_channels,
-                out_channels=output_channels,
-                initial_task_id=initial_task,
-                gate_hidden=self._cfg.get("gate_hidden", 64),
-                min_gate=self._cfg.get("min_gate", 0.1),
-                deep=deep_adapter,
-            ).to(device)
-            self._gated = True
-        else:
-            self._adapter = _OutputAdapter(
-                in_channels=adapter_channels,
-                out_channels=output_channels,
-                deep=deep_adapter,
-            ).to(device)
-            self._gated = False
+        adapter_mode = self._cfg.get("adapter_mode", "3d")  # "3d" or "slice_2d"
+
+        self._adapter, self._gated = self._create_adapter(
+            adapter_type, adapter_mode, adapter_channels, output_channels,
+            deep_adapter, device,
+        )
 
         # Load pre-trained adapter weights if provided
         adapter_ckpt = self._cfg.get("adapter_ckpt_path")
@@ -188,7 +174,8 @@ class MedSAM3Backend(TeacherBackend):
         logger.info(
             f"MedSAM3Backend: loaded (hash={self._ckpt_hash}, "
             f"output_channels={output_channels}, lora={'yes' if lora_path else 'no'}, "
-            f"adapter={'gated' if self._gated else ('pretrained' if adapter_ckpt else 'random')})"
+            f"adapter={'gated' if self._gated else ('pretrained' if adapter_ckpt else 'random')}, "
+            f"mode={adapter_mode})"
         )
 
     def _load_model_from_hf(
@@ -230,32 +217,74 @@ class MedSAM3Backend(TeacherBackend):
 
         adapter_channels = self._cfg.get("adapter_channels", 256)
         deep_adapter = self._cfg.get("deep_adapter", False)
-
         adapter_type = self._cfg.get("adapter_type", "standard")
-        if adapter_type == "gated_residual":
+        adapter_mode = self._cfg.get("adapter_mode", "3d")
+
+        self._adapter, self._gated = self._create_adapter(
+            adapter_type, adapter_mode, adapter_channels, output_channels,
+            deep_adapter, device,
+        )
+
+        logger.info(
+            f"MedSAM3Backend: loaded from HF (output_channels={output_channels}, "
+            f"lora={'yes' if lora_path else 'no'}, "
+            f"adapter={'gated' if self._gated else ('deep' if deep_adapter else 'standard')}, "
+            f"mode={adapter_mode})"
+        )
+
+    def _create_adapter(
+        self,
+        adapter_type: str,
+        adapter_mode: str,
+        adapter_channels: int,
+        output_channels: int,
+        deep: bool,
+        device: str,
+    ) -> tuple[nn.Module, bool]:
+        """Create the appropriate adapter based on type and mode.
+
+        Returns (adapter, is_gated) tuple.
+        """
+        if adapter_mode == "slice_2d":
+            if adapter_type == "gated_residual":
+                from .slice_adapter import SliceWiseGRACEAdapter
+                initial_task = self._cfg.get("initial_task_id", "task_0")
+                adapter = SliceWiseGRACEAdapter(
+                    in_channels=adapter_channels,
+                    out_channels=output_channels,
+                    initial_task_id=initial_task,
+                    gate_hidden=self._cfg.get("gate_hidden", 64),
+                    min_gate=self._cfg.get("min_gate", 0.1),
+                    deep=deep,
+                ).to(device)
+                return adapter, True
+            else:
+                from .slice_adapter import SliceWiseAdapter
+                adapter = SliceWiseAdapter(
+                    in_channels=adapter_channels,
+                    out_channels=output_channels,
+                    deep=deep,
+                ).to(device)
+                return adapter, False
+        elif adapter_type == "gated_residual":
             from .gated_adapter import GatedResidualAdapter
             initial_task = self._cfg.get("initial_task_id", "task_0")
-            self._adapter = GatedResidualAdapter(
+            adapter = GatedResidualAdapter(
                 in_channels=adapter_channels,
                 out_channels=output_channels,
                 initial_task_id=initial_task,
                 gate_hidden=self._cfg.get("gate_hidden", 64),
                 min_gate=self._cfg.get("min_gate", 0.1),
-                deep=deep_adapter,
+                deep=deep,
             ).to(device)
-            self._gated = True
+            return adapter, True
         else:
-            self._adapter = _OutputAdapter(
+            adapter = _OutputAdapter(
                 in_channels=adapter_channels,
                 out_channels=output_channels,
-                deep=deep_adapter,
+                deep=deep,
             ).to(device)
-
-        logger.info(
-            f"MedSAM3Backend: loaded from HF (output_channels={output_channels}, "
-            f"lora={'yes' if lora_path else 'no'}, "
-            f"adapter={'gated' if self._gated else ('deep' if deep_adapter else 'standard')})"
-        )
+            return adapter, False
 
     def _apply_lora(self, lora_path: str) -> None:
         """Apply LoRA weights from MedSAM3's fine-tuning."""

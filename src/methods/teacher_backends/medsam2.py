@@ -164,10 +164,33 @@ class MedSAM2Backend(TeacherBackend):
         feat_channels = self._model.hidden_dim  # set from image_encoder.neck.d_model
         adapter_channels = cfg_adapter = self._cfg.get("adapter_channels", feat_channels)
 
-        # Choose adapter type
+        # Choose adapter type and mode
         adapter_type = self._cfg.get("adapter_type", "standard")
+        adapter_mode = self._cfg.get("adapter_mode", "3d")  # "3d" or "slice_2d"
         deep_adapter = self._cfg.get("deep_adapter", False)
-        if adapter_type == "gated_residual":
+
+        if adapter_mode == "slice_2d":
+            if adapter_type == "gated_residual":
+                from .slice_adapter import SliceWiseGRACEAdapter
+                initial_task = self._cfg.get("initial_task_id", "task_0")
+                self._adapter = SliceWiseGRACEAdapter(
+                    in_channels=adapter_channels,
+                    out_channels=output_channels,
+                    initial_task_id=initial_task,
+                    gate_hidden=self._cfg.get("gate_hidden", 64),
+                    min_gate=self._cfg.get("min_gate", 0.1),
+                    deep=deep_adapter,
+                ).to(device)
+                self._gated = True
+            else:
+                from .slice_adapter import SliceWiseAdapter
+                self._adapter = SliceWiseAdapter(
+                    in_channels=adapter_channels,
+                    out_channels=output_channels,
+                    deep=deep_adapter,
+                ).to(device)
+                self._gated = False
+        elif adapter_type == "gated_residual":
             from .gated_adapter import GatedResidualAdapter
             initial_task = self._cfg.get("initial_task_id", "task_0")
             self._adapter = GatedResidualAdapter(

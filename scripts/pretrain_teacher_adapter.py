@@ -51,35 +51,13 @@ from src.utils.reproducibility import set_seed
 from src.data.registry import create_loaders
 
 
-def _dicece_loss(logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-    """Dice + CE loss matching the student's training loss."""
-    if logits.ndim != 5 or target.ndim != 4:
-        raise ValueError(f"_dicece_loss shape error: logits={logits.shape}, target={target.shape}")
-    num_classes = logits.shape[1]
-    probs = F.softmax(logits, dim=1)
-    target_one_hot = F.one_hot(target.long(), num_classes).permute(0, -1, *range(1, target.ndim)).float()
-
-    smooth = 1e-5
-    dice_loss = 0.0
-    count = 0
-    for c in range(1, num_classes):
-        pred_c = probs[:, c]
-        target_c = target_one_hot[:, c]
-        intersection = (pred_c * target_c).sum()
-        dice_score = (2.0 * intersection + smooth) / (pred_c.sum() + target_c.sum() + smooth)
-        dice_loss += 1.0 - dice_score
-        count += 1
-    if count > 0:
-        dice_loss /= count
-
-    ce_loss = F.cross_entropy(logits, target)
-    return dice_loss + ce_loss
+from src.utils.losses import dicece_loss as _dicece_loss
 
 
 def create_teacher_backend(
     teacher_type: str, teacher_ckpt: str, out_channels: int, device: str,
     adapter_type: str = "standard", task_id: str = "task_0",
-    deep_adapter: bool = False,
+    deep_adapter: bool = False, adapter_mode: str = "3d",
 ):
     """Create and load a teacher backend."""
     cfg = {
@@ -88,6 +66,7 @@ def create_teacher_backend(
         "output_channels": out_channels,
         "adapter_channels": 256,
         "adapter_type": adapter_type,
+        "adapter_mode": adapter_mode,
         "initial_task_id": task_id,
         "deep_adapter": deep_adapter,
     }
@@ -111,6 +90,8 @@ def main():
     ap.add_argument("--max-steps-per-epoch", type=int, default=100)
     ap.add_argument("--adapter-type", default="standard", choices=["standard", "gated_residual"],
                     help="Adapter architecture (standard or gated_residual)")
+    ap.add_argument("--adapter-mode", default="3d", choices=["3d", "slice_2d"],
+                    help="Adapter spatial mode: 3d (default) or slice_2d (per-slice 2D conv)")
     ap.add_argument("--deep-adapter", action="store_true",
                     help="Use deeper adapter (more conv layers) for higher capacity")
     ap.add_argument("--task-id", default="task_0", help="Task ID for gated adapter")
@@ -158,10 +139,10 @@ def main():
     backend = create_teacher_backend(
         args.teacher_type, args.teacher_ckpt, out_channels, device,
         adapter_type=args.adapter_type, task_id=args.task_id,
-        deep_adapter=args.deep_adapter,
+        deep_adapter=args.deep_adapter, adapter_mode=args.adapter_mode,
     )
     is_gated = args.adapter_type == "gated_residual"
-    logger.info(f"Teacher backend loaded (backbone frozen, adapter={args.adapter_type})")
+    logger.info(f"Teacher backend loaded (backbone frozen, adapter={args.adapter_type}, mode={args.adapter_mode})")
 
     # Only optimize the adapter
     adapter = backend._adapter
