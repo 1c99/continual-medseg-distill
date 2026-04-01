@@ -131,10 +131,43 @@ class SAM3Backend(TeacherBackend):
             out_channels=output_channels,
         ).to(device)
 
+        # Load pre-trained adapter weights if provided
+        adapter_ckpt = self._cfg.get("adapter_ckpt_path")
+        if adapter_ckpt:
+            self._load_adapter_weights(adapter_ckpt)
+
         logger.info(
             f"SAM3Backend: loaded (hash={self._ckpt_hash}, "
-            f"output_channels={output_channels})"
+            f"output_channels={output_channels}, "
+            f"adapter={'pretrained' if adapter_ckpt else 'random'})"
         )
+
+    def _load_adapter_weights(self, adapter_ckpt: str) -> None:
+        """Load pre-trained adapter weights from a checkpoint."""
+        path = Path(adapter_ckpt)
+        if not path.exists():
+            logger.warning(f"SAM3Backend: adapter checkpoint not found: {path}, using random init")
+            return
+        state = torch.load(str(path), map_location=self._device, weights_only=False)
+        adapter_sd = state.get("adapter_state_dict", state)
+        self._adapter.load_state_dict(adapter_sd)
+        logger.info(f"SAM3Backend: loaded pre-trained adapter from {path}")
+
+    def reconfigure_adapter(self, out_channels: int, task_id: str | None = None) -> None:
+        """Rebuild output adapter for a new task's channel count."""
+        if self._adapter is None:
+            return
+        current_out = self._adapter.proj[-1].out_channels
+        if current_out == out_channels:
+            return
+        adapter_channels = self._cfg.get("adapter_channels", 256)
+        logger.info(
+            f"SAM3Backend: reconfiguring adapter {current_out} -> {out_channels} channels"
+        )
+        self._adapter = _OutputAdapter(
+            in_channels=adapter_channels,
+            out_channels=out_channels,
+        ).to(self._device)
 
     @staticmethod
     def _compute_ckpt_hash(path: Path, nbytes: int = 4096) -> str:

@@ -44,6 +44,14 @@ class TeacherBackend(ABC):
     def eval(self) -> "TeacherBackend":
         """Set model to eval mode."""
 
+    def reconfigure_adapter(self, out_channels: int, task_id: str | None = None) -> None:
+        """Rebuild the output adapter for a new number of output channels.
+
+        Only meaningful for external backends with a random projection head.
+        UNet/snapshot backends ignore this call.
+        """
+        pass
+
     def snapshot(self, model: nn.Module) -> None:
         """Create a frozen copy of *model* as the teacher.
 

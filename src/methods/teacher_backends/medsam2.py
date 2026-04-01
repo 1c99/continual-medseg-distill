@@ -42,14 +42,34 @@ _IMG_STD = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
 class _OutputAdapter(nn.Module):
     """Projects SAM2 backbone features to dense segmentation logits."""
 
-    def __init__(self, in_channels: int = 256, out_channels: int = 14):
+    def __init__(self, in_channels: int = 256, out_channels: int = 14, deep: bool = False):
         super().__init__()
-        self.proj = nn.Sequential(
-            nn.Conv3d(in_channels, in_channels, kernel_size=3, padding=1),
-            nn.GroupNorm(16, in_channels),
-            nn.GELU(),
-            nn.Conv3d(in_channels, out_channels, kernel_size=1),
-        )
+        if deep:
+            # Deeper adapter with residual connections for higher capacity
+            mid = in_channels
+            self.proj = nn.Sequential(
+                # Block 1: spatial reasoning
+                nn.Conv3d(in_channels, mid, kernel_size=3, padding=1),
+                nn.GroupNorm(16, mid),
+                nn.GELU(),
+                # Block 2: deeper spatial reasoning
+                nn.Conv3d(mid, mid, kernel_size=3, padding=1),
+                nn.GroupNorm(16, mid),
+                nn.GELU(),
+                # Block 3: channel reduction
+                nn.Conv3d(mid, mid // 2, kernel_size=3, padding=1),
+                nn.GroupNorm(8, mid // 2),
+                nn.GELU(),
+                # Block 4: final projection
+                nn.Conv3d(mid // 2, out_channels, kernel_size=1),
+            )
+        else:
+            self.proj = nn.Sequential(
+                nn.Conv3d(in_channels, in_channels, kernel_size=3, padding=1),
+                nn.GroupNorm(16, in_channels),
+                nn.GELU(),
+                nn.Conv3d(in_channels, out_channels, kernel_size=1),
+            )
 
     def forward(self, features: torch.Tensor, target_shape: tuple) -> torch.Tensor:
         out = self.proj(features)
@@ -82,6 +102,7 @@ class MedSAM2Backend(TeacherBackend):
         self._ckpt_hash: str | None = None
         self._model_id: str = ""
         self._device: str = "cpu"
+        self._gated: bool = False
 
     def load(self, cfg: Dict[str, Any], device: str = "cpu") -> None:
         self._cfg = cfg
@@ -142,15 +163,74 @@ class MedSAM2Backend(TeacherBackend):
         # Detect feature channels from the image encoder neck
         feat_channels = self._model.hidden_dim  # set from image_encoder.neck.d_model
         adapter_channels = cfg_adapter = self._cfg.get("adapter_channels", feat_channels)
-        self._adapter = _OutputAdapter(
-            in_channels=adapter_channels,
-            out_channels=output_channels,
-        ).to(device)
+
+        # Choose adapter type
+        adapter_type = self._cfg.get("adapter_type", "standard")
+        deep_adapter = self._cfg.get("deep_adapter", False)
+        if adapter_type == "gated_residual":
+            from .gated_adapter import GatedResidualAdapter
+            initial_task = self._cfg.get("initial_task_id", "task_0")
+            self._adapter = GatedResidualAdapter(
+                in_channels=adapter_channels,
+                out_channels=output_channels,
+                initial_task_id=initial_task,
+                gate_hidden=self._cfg.get("gate_hidden", 64),
+                min_gate=self._cfg.get("min_gate", 0.1),
+            ).to(device)
+            self._gated = True
+        else:
+            self._adapter = _OutputAdapter(
+                in_channels=adapter_channels,
+                out_channels=output_channels,
+                deep=deep_adapter,
+            ).to(device)
+            self._gated = False
+
+        # Load pre-trained adapter weights if provided
+        adapter_ckpt = self._cfg.get("adapter_ckpt_path")
+        if adapter_ckpt:
+            self._load_adapter_weights(adapter_ckpt)
 
         logger.info(
             f"MedSAM2Backend: loaded (hash={self._ckpt_hash}, "
-            f"feat_dim={feat_channels}, output_channels={output_channels})"
+            f"feat_dim={feat_channels}, output_channels={output_channels}, "
+            f"adapter={'pretrained' if adapter_ckpt else 'random'})"
         )
+
+    def _load_adapter_weights(self, adapter_ckpt: str) -> None:
+        """Load pre-trained adapter weights from a checkpoint."""
+        path = Path(adapter_ckpt)
+        if not path.exists():
+            logger.warning(f"MedSAM2Backend: adapter checkpoint not found: {path}, using random init")
+            return
+        state = torch.load(str(path), map_location=self._device, weights_only=False)
+        adapter_sd = state.get("adapter_state_dict", state)
+        self._adapter.load_state_dict(adapter_sd)
+        logger.info(f"MedSAM2Backend: loaded pre-trained adapter from {path}")
+
+    def reconfigure_adapter(self, out_channels: int, task_id: str | None = None) -> None:
+        """Reconfigure adapter for a new task's channel count."""
+        if self._adapter is None:
+            return
+        if self._gated and task_id is not None:
+            # Gated adapter: add new task residual, freeze core if first transition
+            if not self._adapter._core_frozen:
+                self._adapter.freeze_core()
+            self._adapter.add_task(task_id, out_channels)
+            self._adapter.current_task = task_id
+            return
+        # Standard adapter: rebuild entirely
+        current_out = self._adapter.proj[-1].out_channels
+        if current_out == out_channels:
+            return
+        adapter_channels = self._cfg.get("adapter_channels", 256)
+        logger.info(
+            f"MedSAM2Backend: reconfiguring adapter {current_out} -> {out_channels} channels"
+        )
+        self._adapter = _OutputAdapter(
+            in_channels=adapter_channels,
+            out_channels=out_channels,
+        ).to(self._device)
 
     @staticmethod
     def _compute_ckpt_hash(path: Path, nbytes: int = 4096) -> str:
@@ -221,7 +301,21 @@ class MedSAM2Backend(TeacherBackend):
         B, C_in, D, H, W = x.shape
         features_3d = self._extract_features_3d(x)
         target_shape = (D, H, W)
+        if self._gated:
+            logits, _ = self._adapter(features_3d, target_shape)
+            return logits
         return self._adapter(features_3d, target_shape)
+
+    def forward_with_gate(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """Forward pass returning (logits, gate). Gate is None for standard adapter."""
+        if self._model is None or self._adapter is None:
+            raise RuntimeError("MedSAM2Backend: model not loaded.")
+        B, C_in, D, H, W = x.shape
+        features_3d = self._extract_features_3d(x)
+        target_shape = (D, H, W)
+        if self._gated:
+            return self._adapter(features_3d, target_shape)
+        return self._adapter(features_3d, target_shape), None
 
     def forward_features(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         if self._model is None:

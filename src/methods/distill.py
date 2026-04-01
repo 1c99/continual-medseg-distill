@@ -54,6 +54,10 @@ class DistillMethod(ContinualMethod):
         self.feature_weight = float(kd_cfg.get("feature_weight", 1.0))
         self.boundary_sigma = float(kd_cfg.get("boundary_sigma", 1.0))
 
+        # Per-step loss component tracking (read by trainer for logging)
+        self._last_loss_seg = 0.0
+        self._last_loss_kd = 0.0
+
         teacher_cfg = kd_cfg.get("teacher", {})
         # Auto-enable feature hooks if feature mode and not explicitly set
         if self.kd_mode == "feature" and "use_features" not in teacher_cfg:
@@ -139,17 +143,55 @@ class DistillMethod(ContinualMethod):
 
     # ---- KD loss computation ----
 
+    def _match_channels(
+        self,
+        student_logits: torch.Tensor,
+        teacher_logits: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Align channel dimensions between student and teacher logits.
+
+        When teacher and student have different output channels (e.g., different
+        tasks in multi-head setup), uses the shared (minimum) channels for KD.
+        """
+        s_ch = student_logits.shape[1]
+        t_ch = teacher_logits.shape[1]
+        if s_ch != t_ch:
+            min_ch = min(s_ch, t_ch)
+            logger.debug(
+                f"KD channel mismatch: student={s_ch}, teacher={t_ch}; "
+                f"using first {min_ch} channels"
+            )
+            student_logits = student_logits[:, :min_ch]
+            teacher_logits = teacher_logits[:, :min_ch]
+        return student_logits, teacher_logits
+
     def _logit_kd_loss(
         self,
         student_logits: torch.Tensor,
         teacher_logits: torch.Tensor,
+        gate: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Standard logit KD via KL divergence with temperature scaling."""
+        """Standard logit KD via KL divergence with temperature scaling.
+
+        If gate is provided (from CGAD), KD is modulated per-voxel.
+        """
+        student_logits, teacher_logits = self._match_channels(
+            student_logits, teacher_logits
+        )
         T = self.temperature
+        if gate is not None:
+            # Gated KD: per-voxel weighting
+            kl_per_voxel = F.kl_div(
+                F.log_softmax(student_logits / T, dim=1),
+                F.softmax(teacher_logits / T, dim=1),
+                reduction="none",
+            )
+            # gate: (B, 1, D, H, W), kl_per_voxel: (B, C, D, H, W)
+            return (gate * kl_per_voxel).mean() * (T * T)
         return F.kl_div(
             F.log_softmax(student_logits / T, dim=1),
             F.softmax(teacher_logits / T, dim=1),
-            reduction="batchmean",
+            reduction="mean",
         ) * (T * T)
 
     def _feature_kd_loss(self) -> torch.Tensor:
@@ -216,17 +258,21 @@ class DistillMethod(ContinualMethod):
         self,
         student_logits: torch.Tensor,
         teacher_logits: torch.Tensor,
+        gate: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Dispatch to the configured KD loss mode."""
         if self.kd_mode == "logit":
-            return self._logit_kd_loss(student_logits, teacher_logits)
+            return self._logit_kd_loss(student_logits, teacher_logits, gate=gate)
 
         elif self.kd_mode == "feature":
-            logit_loss = self._logit_kd_loss(student_logits, teacher_logits)
+            logit_loss = self._logit_kd_loss(student_logits, teacher_logits, gate=gate)
             feat_loss = self._feature_kd_loss()
             return logit_loss + self.feature_weight * feat_loss
 
         elif self.kd_mode == "weighted":
+            student_logits, teacher_logits = self._match_channels(
+                student_logits, teacher_logits
+            )
             T = self.temperature
             s_log_probs = F.log_softmax(student_logits / T, dim=1)
             t_probs = F.softmax(teacher_logits / T, dim=1)
@@ -238,6 +284,9 @@ class DistillMethod(ContinualMethod):
             return weighted_kl * (T * T)
 
         elif self.kd_mode == "boundary":
+            student_logits, teacher_logits = self._match_channels(
+                student_logits, teacher_logits
+            )
             T = self.temperature
             s_log_probs = F.log_softmax(student_logits / T, dim=1)
             t_probs = F.softmax(teacher_logits / T, dim=1)
@@ -280,18 +329,27 @@ class DistillMethod(ContinualMethod):
                 teacher_logits = cached["logits"].to(device)
                 cache_hit = True
 
+        teacher_gate = None
         if teacher_logits is None:
             self.teacher.to(device)
-            teacher_logits = self.teacher(x)
+            teacher_logits, teacher_gate = self.teacher.forward_with_gate(x)
             # Store in cache
             if self._cache is not None and len(sample_ids) == 1:
                 sid = sample_ids[0] if isinstance(sample_ids, list) else str(sample_ids)
                 self._cache.put(str(sid), teacher_logits)
 
-        kd = self._compute_kd_loss(student_logits, teacher_logits)
+        kd = self._compute_kd_loss(student_logits, teacher_logits, gate=teacher_gate)
+
+        self._last_loss_seg = float(ce.item())
+        self._last_loss_kd = float(kd.item())
 
         self._remove_student_hooks()
         return ce + self.kd_weight * kd
+
+    def set_task_output_channels(self, out_channels: int, task_id: str | None = None) -> None:
+        """Reconfigure teacher adapter for the current task's output channels."""
+        if self.teacher.is_external:
+            self.teacher.reconfigure_adapter(out_channels, task_id=task_id)
 
     # ---- lifecycle ----
 

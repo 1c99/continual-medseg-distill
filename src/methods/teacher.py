@@ -114,6 +114,20 @@ class Teacher:
         """Deepcopy *model* as the frozen teacher."""
         self._backend.snapshot(model)
 
+    def reconfigure_adapter(self, out_channels: int, task_id: str | None = None) -> None:
+        """Reconfigure external teacher's output adapter for a new task.
+
+        No-op for snapshot/UNet backends.
+        """
+        self._backend.reconfigure_adapter(out_channels, task_id=task_id)
+
+    def forward_with_gate(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """Forward pass returning (logits, gate). Gate is None for non-gated backends."""
+        if hasattr(self._backend, "forward_with_gate"):
+            with torch.no_grad():
+                return self._backend.forward_with_gate(x)
+        return self.forward(x), None
+
     # ---- forward ----
 
     @torch.no_grad()
