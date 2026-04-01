@@ -42,6 +42,7 @@ from src.models.factory import build_model
 from src.methods import create_method
 from src.engine.evaluator import evaluate
 from src.engine.multi_task_trainer import run_task_sequence
+from src.engine.distributed import setup_ddp, cleanup_ddp
 
 
 def main():
@@ -50,6 +51,7 @@ def main():
     ap.add_argument("--task-config", required=True, help="Task sequence YAML")
     ap.add_argument("--method-config", default=None)
     ap.add_argument("--dataset-config", default=None)
+    ap.add_argument("--override-config", default=None, help="Extra YAML merged last (e.g. kd weight override)")
     ap.add_argument("--output-dir", default=None)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--resume", action="store_true")
@@ -62,6 +64,8 @@ def main():
         cfg = merge_dicts(cfg, load_yaml(args.method_config))
     if args.dataset_config:
         cfg = merge_dicts(cfg, load_yaml(args.dataset_config))
+    if args.override_config:
+        cfg = merge_dicts(cfg, load_yaml(args.override_config))
 
     # Load task sequence
     task_cfg = load_yaml(args.task_config)
@@ -89,8 +93,12 @@ def main():
     cfg.setdefault("runtime", {})
     cfg["runtime"]["device"] = "cuda" if torch.cuda.is_available() else "cpu"
 
+    # Distributed (DDP) setup — no-op when runtime.distributed.enabled is false
+    dist_ctx = setup_ddp(cfg)
+
     # Apply model overrides from first task so the model is built with the
-    # correct architecture (all tasks in this protocol share the same head).
+    # correct architecture. Multi-head wrapper is created with first task's head.
+    first_task_id = task_configs[0].get("id", "task_0")
     first_task_model = task_configs[0].get("model", {})
     if first_task_model:
         cfg = merge_dicts(cfg, {"model": first_task_model})
@@ -145,7 +153,7 @@ def main():
     logger.info(f"Commit: {commit_hash}")
     logger.info(f"Seed: {seed}")
 
-    model = build_model(cfg)
+    model = build_model(cfg, task_id=first_task_id)
     method = create_method(cfg)
 
     results = run_task_sequence(
@@ -158,7 +166,11 @@ def main():
         output_dir=output_dir,
         dry_run=args.dry_run,
         resume=args.resume,
+        dist_ctx=dist_ctx,
     )
+
+    # Cleanup DDP
+    cleanup_ddp()
 
     # Print summary
     logger.info("=" * 50)

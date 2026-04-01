@@ -19,6 +19,14 @@ def evaluate(model: torch.nn.Module, val_loader, cfg: Dict[str, Any], logger):
         )
     )
 
+    # Switch to the correct task head for multi-head models
+    task_id = cfg.get("task", {}).get("id") or cfg.get("id")
+    if task_id and hasattr(model, "current_task"):
+        prev_task = model.current_task
+        model.current_task = task_id
+    else:
+        prev_task = None
+
     model.to(device)
     model.eval()
     total = 0
@@ -64,6 +72,10 @@ def evaluate(model: torch.nn.Module, val_loader, cfg: Dict[str, Any], logger):
         f"dice_mean={seg['dice_mean']:.4f} "
         f"hd95_mean={seg['hd95_mean']:.4f}"
     )
+
+    # Restore previous task head
+    if prev_task is not None and hasattr(model, "current_task"):
+        model.current_task = prev_task
 
     return {
         "voxel_acc": float(voxel_acc),

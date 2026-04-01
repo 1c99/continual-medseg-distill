@@ -269,6 +269,7 @@ def run_task_sequence(
     output_dir: Path,
     dry_run: bool = False,
     resume: bool = False,
+    dist_ctx=None,
 ) -> Dict[str, Any]:
     """Run a sequence of tasks with continual learning.
 
@@ -339,12 +340,21 @@ def run_task_sequence(
                 task_order = []
                 task_eval_history = {}
 
+            # Register heads for already-completed tasks (multi-head models)
+            if hasattr(model, "register_head"):
+                for prev_idx in range(start_idx):
+                    prev_override = task_configs[prev_idx]
+                    prev_task_id = prev_override.get("id", f"task_{prev_idx}")
+                    prev_out_ch = prev_override.get("model", {}).get("out_channels")
+                    if prev_out_ch is not None:
+                        model.register_head(prev_task_id, prev_out_ch)
+
             # Rebuild val_loaders for already-completed tasks
             for prev_idx in range(start_idx):
                 prev_override = task_configs[prev_idx]
                 prev_task_id = prev_override.get("id", f"task_{prev_idx}")
                 prev_cfg = merge_dicts(global_cfg, prev_override)
-                _, prev_val_loader = create_loaders(prev_cfg)
+                _, prev_val_loader = create_loaders(prev_cfg, dist_ctx=dist_ctx)
                 val_loaders[prev_task_id] = (prev_val_loader, prev_cfg)
         else:
             logger.info("No previous progress found. Starting from scratch.")
@@ -354,9 +364,11 @@ def run_task_sequence(
         task_override = task_configs[task_idx]
         task_id = task_override.get("id", f"task_{task_idx}")
         task_order.append(task_id)
-        logger.info(
-            f"=== Task {task_idx + 1}/{len(task_configs)}: {task_id} ==="
-        )
+        _is_main = dist_ctx is None or dist_ctx.is_main_process()
+        if _is_main:
+            logger.info(
+                f"=== Task {task_idx + 1}/{len(task_configs)}: {task_id} ==="
+            )
 
         # Build task-specific config
         task_cfg = merge_dicts(global_cfg, task_override)
@@ -364,8 +376,25 @@ def run_task_sequence(
         task_cfg.setdefault("output", {})
         task_cfg["output"]["dir"] = str(task_output)
 
+        # Register head for this task (multi-head models)
+        if hasattr(model, "register_head"):
+            task_out_channels = task_override.get("model", {}).get("out_channels")
+            if task_out_channels is not None:
+                model.register_head(task_id, task_out_channels)
+            model.current_task = task_id
+
+        # Notify method of current task (for replay tagging)
+        if hasattr(method, "set_current_task"):
+            method.set_current_task(task_id)
+
+        # Reconfigure external teacher adapter for this task's output channels
+        if hasattr(method, "set_task_output_channels"):
+            task_out_channels = task_override.get("model", {}).get("out_channels")
+            if task_out_channels is not None:
+                method.set_task_output_channels(task_out_channels, task_id=task_id)
+
         # Create data loaders for this task
-        train_loader, val_loader = create_loaders(task_cfg)
+        train_loader, val_loader = create_loaders(task_cfg, dist_ctx=dist_ctx)
         val_loaders[task_id] = (val_loader, task_cfg)
 
         # Train on this task
@@ -386,10 +415,11 @@ def run_task_sequence(
             prev_loader, prev_cfg = val_loaders[prev_id]
             metrics = evaluate_fn(model, prev_loader, prev_cfg, logger)
             task_eval_history[task_id][prev_id] = metrics
-            logger.info(
-                f"  eval[{prev_id}] dice={metrics.get('dice_mean', float('nan')):.4f} "
-                f"hd95={metrics.get('hd95_mean', float('nan')):.4f}"
-            )
+            if _is_main:
+                logger.info(
+                    f"  eval[{prev_id}] dice={metrics.get('dice_mean', float('nan')):.4f} "
+                    f"hd95={metrics.get('hd95_mean', float('nan')):.4f}"
+                )
 
         # Save task checkpoint + method state
         _save_task_checkpoint(
@@ -415,7 +445,8 @@ def run_task_sequence(
             output_dir, task_idx, task_id, task_order, task_eval_history,
             resume_count=resume_count,
         )
-        logger.info(f"  checkpoint + progress saved: {task_output / 'checkpoints'}")
+        if _is_main:
+            logger.info(f"  checkpoint + progress saved: {task_output / 'checkpoints'}")
 
     # Compute forgetting
     forgetting = compute_forgetting(task_eval_history, task_order)
