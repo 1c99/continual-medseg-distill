@@ -362,13 +362,12 @@ class DistillReplayEWCMethod(ReplayMethod):
         if self._reference_loss is None:
             self._reference_loss = base_loss.detach().item()
 
-        # KD loss on CURRENT TASK data
-        # For external teachers: skip current-task KD because the adapter for the
-        # current task is new/weak. GT labels (in CE loss) are strictly better.
-        # KD value comes from REPLAY data where the old-task adapter is pre-trained.
-        # For snapshot teachers: compute normally (teacher = frozen student copy).
+        # KD on CURRENT TASK data is SKIPPED entirely.
+        # For disjoint tasks (organs→muscles), the teacher (snapshot or external)
+        # produces predictions for the OLD task on NEW task data — this is noise.
+        # KD value comes ONLY from REPLAY data where the teacher is reliable.
         kd = torch.tensor(0.0, device=base_loss.device)
-        if self.teacher.has_model and not self.teacher.is_external:
+        if False:  # Disabled — current-task KD is noise for disjoint tasks
             x = batch["image"].to(base_loss.device)
             student_logits = model(x)
             self.teacher.to(base_loss.device)
