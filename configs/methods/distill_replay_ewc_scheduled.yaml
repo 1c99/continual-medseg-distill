@@ -1,0 +1,26 @@
+# DRE with scheduled EWC protection (low→high over training)
+# Like LR scheduler: learn freely early, protect more as training stabilizes
+
+method:
+  name: distill_replay_ewc
+  adaptive_scaling: true
+  steps_per_epoch_hint: 100
+  kd:
+    weight: 0.7
+    temperature: 2.0
+    target_ratio: 0.3
+    teacher:
+      type: snapshot
+  replay:
+    buffer_size: 500
+    weight: 1.0
+  ewc:
+    weight: 0.2
+    target_ratio: 0.2       # fallback if schedule disabled
+    fisher_samples: 64
+    schedule:
+      enabled: true
+      ratio_start: 0.02     # 2% of task loss at epoch 0 (nearly free learning)
+      ratio_end: 0.3        # 30% of task loss by warmup end (strong protection)
+      warmup_epochs: 30      # ramp over 30 epochs (of 50 total)
+      type: cosine           # smooth cosine ramp

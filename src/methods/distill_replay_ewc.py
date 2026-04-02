@@ -49,6 +49,17 @@ class DistillReplayEWCMethod(ReplayMethod):
         self._ewc_target_ratio = float(ewc_cfg.get("target_ratio", 0.5))
         self._kd_target_ratio = float(kd_cfg.get("target_ratio", 0.3))
 
+        # EWC protection scheduler: ramps ratio from low → high over training
+        # Like LR scheduler but for protection strength
+        ewc_sched = ewc_cfg.get("schedule", {})
+        self._ewc_schedule_enabled = bool(ewc_sched.get("enabled", False))
+        self._ewc_ratio_start = float(ewc_sched.get("ratio_start", 0.05))
+        self._ewc_ratio_end = float(ewc_sched.get("ratio_end", 0.3))
+        self._ewc_warmup_epochs = int(ewc_sched.get("warmup_epochs", 10))
+        self._ewc_schedule_type = ewc_sched.get("type", "linear")  # linear, cosine
+        self._current_task_step = 0
+        self._steps_per_epoch = int(mcfg.get("steps_per_epoch_hint", 100))
+
         # FIX 2: Reference loss for stable adaptive EWC scaling.
         # Anchored at the start of each task so EWC protection does not
         # decay as the task loss decreases during training.
@@ -155,6 +166,28 @@ class DistillReplayEWCMethod(ReplayMethod):
     # ------------------------------------------------------------------
     # FIX 1: Replay-aware KD with teacher head switching
     # ------------------------------------------------------------------
+
+    def _get_scheduled_ewc_ratio(self) -> float:
+        """Compute EWC ratio based on schedule (low→high over training).
+
+        Like a learning rate scheduler but for protection strength:
+          Early epochs: low ratio → model learns new task freely
+          Late epochs:  high ratio → protect old task knowledge
+        """
+        if not self._ewc_schedule_enabled:
+            return self._ewc_target_ratio
+
+        start = self._ewc_ratio_start
+        end = self._ewc_ratio_end
+        warmup = self._ewc_warmup_epochs
+        current_epoch = self._current_task_step / max(self._steps_per_epoch, 1)
+        t = min(current_epoch / max(warmup, 1), 1.0)
+
+        if self._ewc_schedule_type == "cosine":
+            import math
+            return start + (end - start) * (1 - math.cos(math.pi * t)) / 2
+        else:
+            return start + (end - start) * t
 
     def _compute_replay_kd(
         self,
@@ -358,6 +391,9 @@ class DistillReplayEWCMethod(ReplayMethod):
         # base CE + replay from ReplayMethod
         base_loss = super().training_loss(model, batch, device)
 
+        # Track step count for EWC schedule
+        self._current_task_step += 1
+
         # FIX 2: Anchor reference loss at first step of each task
         if self._reference_loss is None:
             self._reference_loss = base_loss.detach().item()
@@ -429,8 +465,9 @@ class DistillReplayEWCMethod(ReplayMethod):
                 kd_term = kd
 
             if ewc.item() > 0:
+                ewc_ratio = self._get_scheduled_ewc_ratio()
                 ewc_scale = ref_loss / ewc.detach().clamp(min=1e-8)
-                ewc_term = self._ewc_target_ratio * ewc_scale * ewc
+                ewc_term = ewc_ratio * ewc_scale * ewc
             else:
                 ewc_term = ewc
 
@@ -468,8 +505,9 @@ class DistillReplayEWCMethod(ReplayMethod):
             self.teacher.reconfigure_adapter(out_channels, task_id=task_id)
 
     def post_task_update(self, model: nn.Module, **kwargs) -> None:
-        # FIX 2: Reset reference loss for the next task
+        # Reset for next task
         self._reference_loss = None
+        self._current_task_step = 0
 
         # Teacher snapshot (skip for external teachers like SAM3/MedSAM3)
         if not self.teacher.is_external:
