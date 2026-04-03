@@ -1,0 +1,30 @@
+# nnU-Net student at 96³ (patch-friendly, fits with replay on 24GB)
+model:
+  name: nnunet
+  in_channels: 1
+  n_stages: 5
+  features_per_stage: [32, 64, 128, 256, 512]
+  n_conv_per_stage: [2, 2, 2, 2, 2]
+  n_conv_per_stage_decoder: [2, 2, 2, 2]
+
+data:
+  source: totalseg
+  batch_size: 2
+  val_batch_size: 2
+  totalseg:
+    root: /media/user/data2/data2/data/Totalsegmentator_dataset
+    shape: [96, 96, 96]
+    split_manifest: data/splits/totalseg_train_clean_v1.json
+
+train:
+  epochs: 50
+  lr: 0.001
+  max_steps_per_epoch: 100
+  loss_type: dicece
+
+method:
+  replay:
+    buffer_size: 500
+
+experiment:
+  seed: 42

@@ -1,0 +1,16 @@
+method:
+  name: distill_replay_ewc
+  adaptive_scaling: true
+  kd:
+    weight: 0.7
+    temperature: 2.0
+    target_ratio: 0.3
+    teacher:
+      type: snapshot
+  replay:
+    buffer_size: 500
+    weight: 1.0
+  ewc:
+    weight: 0.2
+    target_ratio: 0.1
+    fisher_samples: 64

@@ -1,0 +1,21 @@
+# nnU-Net student + adaptive EWC, 128³, 50 epochs
+model:
+  name: nnunet
+  in_channels: 1
+  n_stages: 5
+  features_per_stage: [32, 64, 128, 256, 512]
+  n_conv_per_stage: [2, 2, 2, 2, 2]
+  n_conv_per_stage_decoder: [2, 2, 2, 2]
+
+train:
+  epochs: 50
+  lr: 0.001
+  max_steps_per_epoch: 100
+  loss_type: dicece
+
+method:
+  replay:
+    buffer_size: 500
+
+experiment:
+  seed: 42
