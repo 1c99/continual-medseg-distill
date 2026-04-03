@@ -63,34 +63,81 @@ class MultiHeadWrapper(nn.Module):
     def register_head(self, task_id: str, out_channels: int) -> None:
         """Register a new task-specific output head.
 
-        Creates a fresh output block with the specified number of output
-        channels, matching the architecture of the original output block
-        but with reinitialized weights.
+        Creates a fresh output block by deep-copying the original output
+        block architecture and patching Conv/Norm layers for the new
+        output channel count.
         """
         if task_id in self.heads:
             logger.info(f"Head '{task_id}' already registered, skipping")
             return
 
-        from monai.networks.blocks import Convolution, ResidualUnit
+        # Deep-copy the original output block template
+        new_head = copy.deepcopy(self._output_block_template)
 
-        # Read input channels from the original output block's ConvTranspose3d
-        in_ch = self._output_block_template[0].conv.in_channels
-        stride = self._output_block_template[0].conv.stride
+        # Detect original output channel count from the template
+        orig_out_ch = self._head_channels[list(self._head_channels.keys())[0]]
 
-        new_head = nn.Sequential(
-            Convolution(
-                spatial_dims=3,
-                in_channels=in_ch,
-                out_channels=out_channels,
-                strides=stride,
-                is_transposed=True,
-            ),
-            ResidualUnit(
-                spatial_dims=3,
-                in_channels=out_channels,
-                out_channels=out_channels,
-            ),
-        )
+        if out_channels != orig_out_ch:
+            # Patch Conv3d / ConvTranspose3d layers whose channel counts
+            # match the original output channels
+            conv_replacements = []
+            for parent in new_head.modules():
+                for attr_name, child in parent.named_children():
+                    if isinstance(child, (nn.Conv3d, nn.ConvTranspose3d)):
+                        new_in = child.in_channels
+                        new_out = child.out_channels
+                        if child.in_channels == orig_out_ch:
+                            new_in = out_channels
+                        if child.out_channels == orig_out_ch:
+                            new_out = out_channels
+                        if new_in != child.in_channels or new_out != child.out_channels:
+                            kwargs = dict(
+                                in_channels=new_in,
+                                out_channels=new_out,
+                                kernel_size=child.kernel_size,
+                                stride=child.stride,
+                                padding=child.padding,
+                                dilation=child.dilation,
+                                groups=child.groups,
+                                bias=child.bias is not None,
+                                padding_mode=child.padding_mode,
+                            )
+                            if isinstance(child, nn.ConvTranspose3d):
+                                kwargs["output_padding"] = child.output_padding
+                            new_conv = child.__class__(**kwargs)
+                            conv_replacements.append((parent, attr_name, new_conv))
+            for parent, attr_name, new_conv in conv_replacements:
+                setattr(parent, attr_name, new_conv)
+
+            # Also patch normalization layers that depend on channel count
+            norm_replacements = []
+            for parent in new_head.modules():
+                for attr_name, child in parent.named_children():
+                    if isinstance(child, (nn.BatchNorm3d, nn.InstanceNorm3d)):
+                        if child.num_features == orig_out_ch:
+                            new_norm = child.__class__(
+                                out_channels,
+                                eps=child.eps,
+                                momentum=child.momentum,
+                                affine=child.affine,
+                                track_running_stats=child.track_running_stats,
+                            )
+                            norm_replacements.append((parent, attr_name, new_norm))
+                    elif isinstance(child, nn.GroupNorm):
+                        if child.num_channels == orig_out_ch:
+                            # Adjust num_groups if needed to evenly divide new channel count
+                            num_groups = child.num_groups
+                            while out_channels % num_groups != 0 and num_groups > 1:
+                                num_groups -= 1
+                            new_norm = nn.GroupNorm(
+                                num_groups=num_groups,
+                                num_channels=out_channels,
+                                eps=child.eps,
+                                affine=child.affine,
+                            )
+                            norm_replacements.append((parent, attr_name, new_norm))
+            for parent, attr_name, new_norm in norm_replacements:
+                setattr(parent, attr_name, new_norm)
 
         self.heads[task_id] = new_head
         self._head_channels[task_id] = out_channels

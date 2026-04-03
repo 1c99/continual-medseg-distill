@@ -221,6 +221,9 @@ class Teacher:
     ) -> None:
         if isinstance(self._backend, UNetBackend):
             self._backend.load_state_dict_from_saved(state, model_template)
+        else:
+            # External backends (SAM3, MedSAM3, etc.): delegate to backend
+            self._backend.load_state_dict(state)
 
     def to(self, device) -> "Teacher":
         self._backend.to(device)

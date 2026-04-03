@@ -224,7 +224,12 @@ class MedSAM2Backend(TeacherBackend):
             return
         state = torch.load(str(path), map_location=self._device, weights_only=False)
         adapter_sd = state.get("adapter_state_dict", state)
-        self._adapter.load_state_dict(adapter_sd)
+        # Gated adapters save with state_dict_full() (includes prototypes/task
+        # metadata). Detect this and use load_state_dict_full() to restore.
+        if self._gated and hasattr(self._adapter, "load_state_dict_full"):
+            self._adapter.load_state_dict_full(adapter_sd)
+        else:
+            self._adapter.load_state_dict(adapter_sd)
         logger.info(f"MedSAM2Backend: loaded pre-trained adapter from {path}")
 
     def reconfigure_adapter(self, out_channels: int, task_id: str | None = None) -> None:
@@ -364,8 +369,20 @@ class MedSAM2Backend(TeacherBackend):
     def state_dict(self) -> Dict[str, Any]:
         state: Dict[str, Any] = {"teacher_metadata": self.metadata}
         if self._adapter is not None:
-            state["adapter_state_dict"] = self._adapter.state_dict()
+            if self._gated and hasattr(self._adapter, "state_dict_full"):
+                state["adapter_state_dict"] = self._adapter.state_dict_full()
+            else:
+                state["adapter_state_dict"] = self._adapter.state_dict()
         return state
+
+    def load_state_dict(self, state: Dict[str, Any]) -> None:
+        """Restore adapter weights from a previously saved state."""
+        adapter_sd = state.get("adapter_state_dict")
+        if adapter_sd is not None and self._adapter is not None:
+            if self._gated and hasattr(self._adapter, "load_state_dict_full"):
+                self._adapter.load_state_dict_full(adapter_sd)
+            else:
+                self._adapter.load_state_dict(adapter_sd)
 
     def eval(self) -> "MedSAM2Backend":
         if self._model is not None:

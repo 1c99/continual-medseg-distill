@@ -18,6 +18,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src.engine.distributed import unwrap_model
 from .replay import ReplayMethod
 from .teacher import Teacher
 
@@ -233,11 +234,11 @@ class DistillReplayEWCMethod(ReplayMethod):
                     continue
 
             # Switch student head for replay task
-            has_multi_head = hasattr(model, "current_task")
+            has_multi_head = hasattr(unwrap_model(model), "current_task")
             prev_student_task = None
             if has_multi_head:
-                prev_student_task = model.current_task
-                model.current_task = task_id
+                prev_student_task = unwrap_model(model).current_task
+                unwrap_model(model).current_task = task_id
 
             # Compute teacher and student logits
             with torch.no_grad():
@@ -277,7 +278,7 @@ class DistillReplayEWCMethod(ReplayMethod):
 
             # Restore student head
             if has_multi_head and prev_student_task is not None:
-                model.current_task = prev_student_task
+                unwrap_model(model).current_task = prev_student_task
 
         return total_kd / max(count, 1)
 
@@ -340,17 +341,17 @@ class DistillReplayEWCMethod(ReplayMethod):
                 continue
 
             # Switch student head for this task
-            has_multi_head = hasattr(model, "current_task")
+            has_multi_head = hasattr(unwrap_model(model), "current_task")
             prev_student_task = None
             if has_multi_head:
-                prev_student_task = model.current_task
-                model.current_task = task_id
+                prev_student_task = unwrap_model(model).current_task
+                unwrap_model(model).current_task = task_id
 
             student_logits = model(xr_task)
 
             # Restore student head
             if has_multi_head and prev_student_task is not None:
-                model.current_task = prev_student_task
+                unwrap_model(model).current_task = prev_student_task
 
             # Interpolate prototype logits to match student spatial resolution
             if proto_logits.shape[2:] != student_logits.shape[2:]:

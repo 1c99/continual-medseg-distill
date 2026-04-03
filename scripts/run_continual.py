@@ -113,47 +113,51 @@ def main():
     logger.info(f"Device: {cfg['runtime']['device']}")
     logger.info(f"Output: {output_dir}")
 
-    # ---- Save run manifest (config locking) ----
-    output_dir.mkdir(parents=True, exist_ok=True)
+    is_main = dist_ctx.is_main_process()
 
+    # ---- Save run manifest (config locking) — rank 0 only ----
     resolved_cfg_str = yaml.safe_dump(cfg, sort_keys=True)
     config_hash = hashlib.sha256(resolved_cfg_str.encode()).hexdigest()[:12]
 
-    try:
-        commit_hash = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=_REPO_ROOT, text=True
-        ).strip()
-    except Exception:
-        commit_hash = "unknown"
+    if is_main:
+        output_dir.mkdir(parents=True, exist_ok=True)
 
-    manifest = {
-        "timestamp": datetime.now().isoformat(),
-        "commit_hash": commit_hash,
-        "config_hash": config_hash,
-        "seed": seed,
-        "sequence_name": seq_name,
-        "method": cfg.get("method", {}).get("name", "finetune"),
-        "tasks": [tc.get("id", f"task_{i}") for i, tc in enumerate(task_configs)],
-        "device": cfg["runtime"]["device"],
-        "dry_run": args.dry_run,
-        "args": {
-            "base_config": args.base_config,
-            "task_config": args.task_config,
-            "method_config": args.method_config,
-            "dataset_config": args.dataset_config,
-        },
-    }
+        try:
+            commit_hash = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=_REPO_ROOT, text=True
+            ).strip()
+        except Exception:
+            commit_hash = "unknown"
 
-    (output_dir / "run_manifest.json").write_text(
-        json.dumps(manifest, indent=2), encoding="utf-8"
-    )
-    (output_dir / "resolved_config.yaml").write_text(resolved_cfg_str, encoding="utf-8")
+        manifest = {
+            "timestamp": datetime.now().isoformat(),
+            "commit_hash": commit_hash,
+            "config_hash": config_hash,
+            "seed": seed,
+            "sequence_name": seq_name,
+            "method": cfg.get("method", {}).get("name", "finetune"),
+            "tasks": [tc.get("id", f"task_{i}") for i, tc in enumerate(task_configs)],
+            "device": cfg["runtime"]["device"],
+            "dry_run": args.dry_run,
+            "args": {
+                "base_config": args.base_config,
+                "task_config": args.task_config,
+                "method_config": args.method_config,
+                "dataset_config": args.dataset_config,
+            },
+        }
 
-    logger.info(f"Config hash: {config_hash}")
-    logger.info(f"Commit: {commit_hash}")
-    logger.info(f"Seed: {seed}")
+        (output_dir / "run_manifest.json").write_text(
+            json.dumps(manifest, indent=2), encoding="utf-8"
+        )
+        (output_dir / "resolved_config.yaml").write_text(resolved_cfg_str, encoding="utf-8")
+
+        logger.info(f"Config hash: {config_hash}")
+        logger.info(f"Commit: {commit_hash}")
+        logger.info(f"Seed: {seed}")
 
     model = build_model(cfg, task_id=first_task_id)
+    model = dist_ctx.wrap_model(model)
     method = create_method(cfg)
 
     results = run_task_sequence(
@@ -172,15 +176,16 @@ def main():
     # Cleanup DDP
     cleanup_ddp()
 
-    # Print summary
-    logger.info("=" * 50)
-    logger.info("CONTINUAL SEQUENCE COMPLETE")
-    logger.info(f"  Tasks: {results['task_order']}")
-    logger.info(f"  Mean forgetting: {results['forgetting']['mean']:.4f}")
-    logger.info(f"  Mean BWT: {results['forgetting'].get('mean_bwt', float('nan')):.4f}")
-    logger.info(f"  Mean FWT: {results['forgetting'].get('mean_fwt', float('nan')):.4f}")
-    logger.info(f"  Artifacts: {results['output_dir']}")
-    logger.info("=" * 50)
+    # Print summary (rank 0 only)
+    if is_main:
+        logger.info("=" * 50)
+        logger.info("CONTINUAL SEQUENCE COMPLETE")
+        logger.info(f"  Tasks: {results['task_order']}")
+        logger.info(f"  Mean forgetting: {results['forgetting']['mean']:.4f}")
+        logger.info(f"  Mean BWT: {results['forgetting'].get('mean_bwt', float('nan')):.4f}")
+        logger.info(f"  Mean FWT: {results['forgetting'].get('mean_fwt', float('nan')):.4f}")
+        logger.info(f"  Artifacts: {results['output_dir']}")
+        logger.info("=" * 50)
 
 
 if __name__ == "__main__":

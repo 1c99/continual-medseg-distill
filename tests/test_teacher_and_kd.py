@@ -337,6 +337,13 @@ def test_kd_mode_affects_loss():
     for mode, val in losses.items():
         assert math.isfinite(val) and val > 0, f"{mode} loss invalid: {val}"
 
+    # Different KD modes should produce observably different losses
+    unique_losses = set(round(v, 6) for v in losses.values())
+    assert len(unique_losses) >= 2, (
+        f"Expected at least 2 distinct loss values across KD modes, "
+        f"but got: {losses}"
+    )
+
 
 # ====================================================================
 # C) Method state round-trip save/load

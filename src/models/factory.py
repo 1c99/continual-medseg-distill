@@ -15,7 +15,13 @@ logger = logging.getLogger(__name__)
 
 def _build_nnunet(mcfg: Dict[str, Any], out_channels: int) -> nn.Module:
     """Build an nnU-Net PlainConvUNet (TotalSegmentator-style architecture)."""
-    from dynamic_network_architectures.architectures.unet import PlainConvUNet
+    try:
+        from dynamic_network_architectures.architectures.unet import PlainConvUNet
+    except ImportError:
+        raise ImportError(
+            "nnU-Net backend requires the 'dynamic_network_architectures' package. "
+            "Install with: pip install dynamic-network-architectures"
+        )
 
     n_stages = mcfg.get("n_stages", 5)
     features = mcfg.get("features_per_stage", [32, 64, 128, 256, 512])

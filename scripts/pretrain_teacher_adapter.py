@@ -161,7 +161,13 @@ def main():
     # Resume from checkpoint if provided
     if args.resume and Path(args.resume).exists():
         ckpt = torch.load(args.resume, map_location=device, weights_only=False)
-        adapter.load_state_dict(ckpt["adapter_state_dict"])
+        adapter_sd = ckpt["adapter_state_dict"]
+        # Gated adapters are saved with state_dict_full() which includes
+        # prototypes/task metadata — must use load_state_dict_full() to restore.
+        if is_gated and hasattr(adapter, "load_state_dict_full"):
+            adapter.load_state_dict_full(adapter_sd)
+        else:
+            adapter.load_state_dict(adapter_sd)
         start_epoch = ckpt.get("epoch", 0)
         best_val_dice = ckpt.get("val_dice", -1.0)
         logger.info(f"Resumed from {args.resume} (epoch={start_epoch}, dice={best_val_dice:.4f})")

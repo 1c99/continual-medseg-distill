@@ -263,6 +263,12 @@ class SAM3Backend(TeacherBackend):
             state["adapter_state_dict"] = self._adapter.state_dict()
         return state
 
+    def load_state_dict(self, state: Dict[str, Any]) -> None:
+        """Restore adapter weights from a previously saved state."""
+        adapter_sd = state.get("adapter_state_dict")
+        if adapter_sd is not None and self._adapter is not None:
+            self._adapter.load_state_dict(adapter_sd)
+
     def eval(self) -> "SAM3Backend":
         if self._model is not None:
             self._model.eval()

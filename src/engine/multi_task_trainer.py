@@ -17,6 +17,7 @@ from typing import Any, Callable, Dict, List
 import torch
 
 from src.data.registry import create_loaders
+from src.engine.distributed import unwrap_model
 from src.engine.trainer import train
 from src.utils.config import merge_dicts
 
@@ -39,7 +40,7 @@ def _save_task_checkpoint(
         {
             "task_idx": task_idx,
             "task_id": task_id,
-            "model_state_dict": model.state_dict(),
+            "model_state_dict": unwrap_model(model).state_dict(),
         },
         path,
     )
@@ -326,6 +327,16 @@ def run_task_sequence(
                 / f"after_{last_task_id}.pt"
             )
             if ckpt_path.exists():
+                # Register heads for already-completed tasks (multi-head models)
+                # MUST happen BEFORE loading checkpoint so state_dict keys match.
+                if hasattr(unwrap_model(model), "register_head"):
+                    for prev_idx in range(start_idx):
+                        prev_override = task_configs[prev_idx]
+                        prev_task_id = prev_override.get("id", f"task_{prev_idx}")
+                        prev_out_ch = prev_override.get("model", {}).get("out_channels")
+                        if prev_out_ch is not None:
+                            unwrap_model(model).register_head(prev_task_id, prev_out_ch)
+
                 _load_task_checkpoint(ckpt_path, model, method, last_task_id)
                 logger.info(
                     f"Resumed from task {start_idx}/{len(task_configs)} "
@@ -339,15 +350,6 @@ def run_task_sequence(
                 start_idx = 0
                 task_order = []
                 task_eval_history = {}
-
-            # Register heads for already-completed tasks (multi-head models)
-            if hasattr(model, "register_head"):
-                for prev_idx in range(start_idx):
-                    prev_override = task_configs[prev_idx]
-                    prev_task_id = prev_override.get("id", f"task_{prev_idx}")
-                    prev_out_ch = prev_override.get("model", {}).get("out_channels")
-                    if prev_out_ch is not None:
-                        model.register_head(prev_task_id, prev_out_ch)
 
             # Rebuild val_loaders for already-completed tasks
             for prev_idx in range(start_idx):
@@ -377,11 +379,11 @@ def run_task_sequence(
         task_cfg["output"]["dir"] = str(task_output)
 
         # Register head for this task (multi-head models)
-        if hasattr(model, "register_head"):
+        if hasattr(unwrap_model(model), "register_head"):
             task_out_channels = task_override.get("model", {}).get("out_channels")
             if task_out_channels is not None:
-                model.register_head(task_id, task_out_channels)
-            model.current_task = task_id
+                unwrap_model(model).register_head(task_id, task_out_channels)
+            unwrap_model(model).current_task = task_id
 
         # Notify method of current task (for replay tagging)
         if hasattr(method, "set_current_task"):
@@ -407,13 +409,14 @@ def run_task_sequence(
             dry_run=dry_run,
             val_loader=val_loader,
             evaluate_fn=evaluate_fn,
+            dist_ctx=dist_ctx,
         )
 
         # Evaluate on ALL seen tasks
         task_eval_history[task_id] = {}
         for prev_id in task_order:
             prev_loader, prev_cfg = val_loaders[prev_id]
-            metrics = evaluate_fn(model, prev_loader, prev_cfg, logger)
+            metrics = evaluate_fn(model, prev_loader, prev_cfg, logger, dist_ctx=dist_ctx)
             task_eval_history[task_id][prev_id] = metrics
             if _is_main:
                 logger.info(
@@ -421,40 +424,50 @@ def run_task_sequence(
                     f"hd95={metrics.get('hd95_mean', float('nan')):.4f}"
                 )
 
-        # Save task checkpoint + method state
-        _save_task_checkpoint(
-            task_output / "checkpoints" / f"after_{task_id}.pt",
-            model,
-            method,
-            task_idx,
-            task_id,
-        )
+        # Save task checkpoint + method state (rank 0 only)
+        # Use try/finally to ensure barrier is always reached (prevents deadlock
+        # if rank 0 save fails while other ranks wait at the barrier).
+        try:
+            if _is_main:
+                _save_task_checkpoint(
+                    task_output / "checkpoints" / f"after_{task_id}.pt",
+                    model,
+                    method,
+                    task_idx,
+                    task_id,
+                )
 
-        # Save per-task LoRA adapter state (if LoRA is enabled)
-        lora_cfg = global_cfg.get("model", {}).get("lora", {})
-        if lora_cfg.get("enabled", False):
-            from src.models.lora import extract_lora_state
-            lora_state = extract_lora_state(model)
-            if lora_state:
-                lora_path = task_output / "checkpoints" / f"lora_state_{task_id}.pt"
-                torch.save(lora_state, lora_path)
-                logger.info(f"  saved LoRA adapter state: {lora_path}")
+                # Save per-task LoRA adapter state (if LoRA is enabled)
+                lora_cfg = global_cfg.get("model", {}).get("lora", {})
+                if lora_cfg.get("enabled", False):
+                    from src.models.lora import extract_lora_state
+                    lora_state = extract_lora_state(model)
+                    if lora_state:
+                        lora_path = task_output / "checkpoints" / f"lora_state_{task_id}.pt"
+                        torch.save(lora_state, lora_path)
+                        logger.info(f"  saved LoRA adapter state: {lora_path}")
 
-        # Save progress for resume
-        _save_progress(
-            output_dir, task_idx, task_id, task_order, task_eval_history,
-            resume_count=resume_count,
-        )
-        if _is_main:
-            logger.info(f"  checkpoint + progress saved: {task_output / 'checkpoints'}")
+                # Save progress for resume
+                _save_progress(
+                    output_dir, task_idx, task_id, task_order, task_eval_history,
+                    resume_count=resume_count,
+                )
+                logger.info(f"  checkpoint + progress saved: {task_output / 'checkpoints'}")
+        finally:
+            # Ensure all ranks wait for checkpoint save before continuing
+            if dist_ctx is not None:
+                dist_ctx.barrier()
 
     # Compute forgetting
     forgetting = compute_forgetting(task_eval_history, task_order)
-    logger.info(f"Mean forgetting (dice_mean): {forgetting['mean']:.4f}")
 
-    # Write evidence outputs
-    _write_task_results(output_dir, task_order, task_eval_history, forgetting)
-    logger.info(f"Evidence outputs written to {output_dir}")
+    _is_main = dist_ctx is None or dist_ctx.is_main_process()
+    if _is_main:
+        logger.info(f"Mean forgetting (dice_mean): {forgetting['mean']:.4f}")
+
+        # Write evidence outputs (rank 0 only)
+        _write_task_results(output_dir, task_order, task_eval_history, forgetting)
+        logger.info(f"Evidence outputs written to {output_dir}")
 
     return {
         "task_order": task_order,

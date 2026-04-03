@@ -212,18 +212,20 @@ def create_loaders(cfg: Dict, dist_ctx=None) -> Tuple[DataLoader, DataLoader]:
         train_sampler = dist_ctx.make_sampler(train_ds, shuffle=True)
         val_sampler = dist_ctx.make_sampler(val_ds, shuffle=False)
 
+    num_workers = data_cfg.get("num_workers", 4)
+
     train_loader = DataLoader(
         train_ds, batch_size=train_bs,
         shuffle=(train_sampler is None),
         sampler=train_sampler,
-        num_workers=4,
+        num_workers=num_workers,
         worker_init_fn=worker_init_fn,
     )
     val_loader = DataLoader(
         val_ds, batch_size=val_bs,
         shuffle=False,
         sampler=val_sampler,
-        num_workers=4,
+        num_workers=num_workers,
         worker_init_fn=worker_init_fn,
     )
     return train_loader, val_loader

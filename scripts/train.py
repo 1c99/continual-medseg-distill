@@ -58,6 +58,7 @@ def main():
     logger.info(f"seed={seed}")
     train_loader, val_loader = create_loaders(cfg, dist_ctx=dist_ctx)
     model = build_model(cfg)
+    model = dist_ctx.wrap_model(model)
     method = create_method(cfg)
 
     logger.info(f"method={cfg.get('method', {}).get('name', 'finetune')}")
@@ -72,14 +73,18 @@ def main():
         dry_run=args.dry_run,
         val_loader=val_loader,
         evaluate_fn=evaluate,
+        dist_ctx=dist_ctx,
     )
-    metrics = evaluate(model, val_loader, cfg, logger)
+    metrics = evaluate(model, val_loader, cfg, logger, dist_ctx=dist_ctx)
     logger.info(f"eval={metrics}")
 
     # Cleanup DDP
     cleanup_ddp()
 
-    # Write run manifest with teacher checkpoint metadata
+    # Write run manifest with teacher checkpoint metadata (rank 0 only)
+    if not dist_ctx.is_main_process():
+        return
+
     output_dir = Path(cfg.get("output", {}).get("dir", "outputs/runs/default"))
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest = {

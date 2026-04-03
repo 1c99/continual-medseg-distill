@@ -111,6 +111,13 @@ class DistributedContext:
         return self.grad_accum_steps > 1 and (step % self.grad_accum_steps != 0)
 
 
+def unwrap_model(model: nn.Module) -> nn.Module:
+    """Return the underlying model, unwrapping DDP/FSDP if present."""
+    if hasattr(model, "module"):
+        return model.module
+    return model
+
+
 def setup_ddp(cfg: Dict[str, Any]) -> DistributedContext:
     """Create DistributedContext from config."""
     dist_cfg = cfg.get("runtime", {}).get("distributed", {})

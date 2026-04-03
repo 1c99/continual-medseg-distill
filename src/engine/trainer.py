@@ -149,6 +149,10 @@ def train(
     best_metric = None
 
     for epoch in range(epochs):
+        # Ensure each DDP rank sees a different data shard per epoch
+        if hasattr(train_loader, "sampler") and hasattr(train_loader.sampler, "set_epoch"):
+            train_loader.sampler.set_epoch(epoch)
+
         pbar = tqdm(train_loader, desc=f"epoch {epoch+1}/{epochs}", disable=not is_main)
         loss_sum = 0.0
         loss_seg_sum = 0.0
@@ -194,7 +198,7 @@ def train(
 
         eval_metrics = {}
         if evaluate_fn is not None and val_loader is not None:
-            eval_metrics = evaluate_fn(model, val_loader, cfg, logger)
+            eval_metrics = evaluate_fn(model, val_loader, cfg, logger, dist_ctx=dist_ctx)
             for k, v in eval_metrics.items():
                 if isinstance(v, dict):
                     for sub_k, sub_v in v.items():

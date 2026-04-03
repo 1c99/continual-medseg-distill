@@ -40,6 +40,13 @@ class TeacherBackend(ABC):
     def state_dict(self) -> Dict[str, Any]:
         """Return serialisable state."""
 
+    def load_state_dict(self, state: Dict[str, Any]) -> None:
+        """Restore from a previously saved ``state_dict()``.
+
+        The default implementation is a no-op.  Backends that persist
+        learnable state (e.g. adapters) should override this.
+        """
+
     @abstractmethod
     def eval(self) -> "TeacherBackend":
         """Set model to eval mode."""

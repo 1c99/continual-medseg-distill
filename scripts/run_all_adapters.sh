@@ -1,9 +1,11 @@
 #!/bin/bash
+set -euo pipefail
 # Train all remaining adapters to convergence
 # Each runs 100 epochs with 100 steps/epoch
 # Monitors for convergence and launches next when GPU frees up
 
 OUTPUT_ROOT=/media/user/data2/data2/data/medseg_outputs/multihead_128_50ep_s42
+mkdir -p "$OUTPUT_ROOT"
 BASE="configs/base.yaml"
 TASK="configs/tasks/taskA_organs.yaml"
 DATA="configs/datasets/totalseg_clean_128.yaml"

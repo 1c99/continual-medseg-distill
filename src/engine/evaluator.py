@@ -4,10 +4,11 @@ from typing import Dict, Any
 
 import torch
 
+from src.engine.distributed import unwrap_model
 from src.utils.metrics import segmentation_metrics
 
 
-def evaluate(model: torch.nn.Module, val_loader, cfg: Dict[str, Any], logger):
+def evaluate(model: torch.nn.Module, val_loader, cfg: Dict[str, Any], logger, dist_ctx=None):
     device = cfg.get("runtime", {}).get("device", "cpu")
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -21,9 +22,9 @@ def evaluate(model: torch.nn.Module, val_loader, cfg: Dict[str, Any], logger):
 
     # Switch to the correct task head for multi-head models
     task_id = cfg.get("task", {}).get("id") or cfg.get("id")
-    if task_id and hasattr(model, "current_task"):
-        prev_task = model.current_task
-        model.current_task = task_id
+    if task_id and hasattr(unwrap_model(model), "current_task"):
+        prev_task = unwrap_model(model).current_task
+        unwrap_model(model).current_task = task_id
     else:
         prev_task = None
 
@@ -63,6 +64,20 @@ def evaluate(model: torch.nn.Module, val_loader, cfg: Dict[str, Any], logger):
             "warnings": ["No validation batches; segmentation metrics set to NaN."],
         }
 
+    # Aggregate metrics across DDP ranks
+    if dist_ctx is not None and dist_ctx.enabled:
+        import torch as _torch
+        # All-reduce scalar metrics (average across ranks)
+        for key in ["dice_mean", "hd95_mean"]:
+            val = seg.get(key, float("nan"))
+            if not (isinstance(val, float) and val != val):  # skip NaN
+                t = _torch.tensor(val, device="cuda")
+                t = dist_ctx.reduce_tensor(t)
+                seg[key] = float(t.item())
+        voxel_acc_t = _torch.tensor(voxel_acc, device="cuda")
+        voxel_acc_t = dist_ctx.reduce_tensor(voxel_acc_t)
+        voxel_acc = float(voxel_acc_t.item())
+
     for w in seg.get("warnings", []):
         logger.warning(w)
 
@@ -74,8 +89,8 @@ def evaluate(model: torch.nn.Module, val_loader, cfg: Dict[str, Any], logger):
     )
 
     # Restore previous task head
-    if prev_task is not None and hasattr(model, "current_task"):
-        model.current_task = prev_task
+    if prev_task is not None and hasattr(unwrap_model(model), "current_task"):
+        unwrap_model(model).current_task = prev_task
 
     return {
         "voxel_acc": float(voxel_acc),
