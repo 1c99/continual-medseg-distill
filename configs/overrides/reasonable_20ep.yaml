@@ -1,0 +1,15 @@
+# Reasonable CL settings: 20 epochs, larger buffer, moderate training
+# 50 epochs was overtraining — 20 epochs allows multi-task features to coexist
+
+train:
+  epochs: 20
+  lr: 0.001
+  max_steps_per_epoch: 100
+  loss_type: dicece
+
+method:
+  replay:
+    buffer_size: 1000
+
+experiment:
+  seed: 42

@@ -1,0 +1,20 @@
+# DRE with BALANCED protection — low EWC + low KD = moderate total
+# Total protection budget: EWC 5% + KD 5% = 10% of task loss
+# Previous configs had 10% + 30% = 40% which locked the backbone
+
+method:
+  name: distill_replay_ewc
+  adaptive_scaling: true
+  kd:
+    weight: 0.7
+    temperature: 2.0
+    target_ratio: 0.05     # replay KD = 5% of task loss (was 0.3 = too strong)
+    teacher:
+      type: snapshot
+  replay:
+    buffer_size: 500
+    weight: 1.0
+  ewc:
+    weight: 0.2
+    target_ratio: 0.05     # EWC = 5% of task loss
+    fisher_samples: 64

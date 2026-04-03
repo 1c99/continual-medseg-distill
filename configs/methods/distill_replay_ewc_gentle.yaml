@@ -1,0 +1,19 @@
+# DRE with VERY gentle protection — let replay do the heavy lifting
+# Total protection: EWC 2% + KD 2% = 4% (vs 40% that locked the backbone)
+
+method:
+  name: distill_replay_ewc
+  adaptive_scaling: true
+  kd:
+    weight: 0.7
+    temperature: 2.0
+    target_ratio: 0.02     # replay KD = 2% of task loss
+    teacher:
+      type: snapshot
+  replay:
+    buffer_size: 1000
+    weight: 1.0
+  ewc:
+    weight: 0.2
+    target_ratio: 0.02     # EWC = 2% of task loss
+    fisher_samples: 64

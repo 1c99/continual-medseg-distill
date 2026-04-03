@@ -1,0 +1,18 @@
+# EWC only with adaptive scaling (no replay, no KD)
+# Isolates the contribution of adaptive EWC to retention
+method:
+  name: distill_replay_ewc
+  adaptive_scaling: true
+  kd:
+    weight: 0.0
+    temperature: 2.0
+    target_ratio: 0.0
+    teacher:
+      type: snapshot
+  replay:
+    buffer_size: 0
+    weight: 0.0
+  ewc:
+    weight: 0.2
+    target_ratio: 0.5
+    fisher_samples: 64

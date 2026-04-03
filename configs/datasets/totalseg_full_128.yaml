@@ -1,0 +1,10 @@
+# TotalSegmentator FULL dataset config — 128³ resolution
+# 963 train / 240 val (80/20 split, excluding corrupt s0864)
+data:
+  source: totalseg
+  batch_size: 2
+  val_batch_size: 2
+  totalseg:
+    root: /media/user/data2/data2/data/Totalsegmentator_dataset
+    shape: [128, 128, 128]
+    split_manifest: data/splits/totalseg_full_v1.json
