@@ -1,0 +1,8 @@
+# MiB: Modeling the Background (Cermelli et al., CVPR 2020)
+# Unbiased CE + KD for class-incremental segmentation.
+method:
+  name: mib
+  mib:
+    kd_weight: 10.0
+    unkd_weight: 10.0
+    temperature: 2.0

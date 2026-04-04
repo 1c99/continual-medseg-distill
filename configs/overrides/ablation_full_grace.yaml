@@ -1,0 +1,9 @@
+# Ablation: Full GRACE (TRA + CGAD + CPA)
+# All three components enabled — this is the complete proposed method.
+method:
+  kd:
+    teacher:
+      adapter_type: gated_residual
+      min_gate: 0.1  # CGAD enabled
+    prototype:
+      weight: 0.3    # CPA enabled

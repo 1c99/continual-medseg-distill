@@ -1,0 +1,113 @@
+# Continual Learning Sequence: A → B → C → D → E (5-Task TotalSegmentator Benchmark)
+#
+# Task-incremental setting on TotalSegmentator:
+# - Task A: 14 abdominal organs (15 ch)
+# - Task B: 10 pelvic muscles (11 ch)
+# - Task C: 7 abdominal vessels (8 ch)
+# - Task D: 11 thoracic organs (12 ch)
+# - Task E: 10 spine structures (11 ch)
+#
+# All tasks share the same CT scans but different segmentation targets.
+# No class overlap between any tasks.
+
+task_sequence:
+  name: totalseg_ABCDE_5task
+  setting: task_incremental
+
+  tasks:
+    - id: taskA_organs
+      description: "Abdominal organ segmentation (14 organs)"
+      data:
+        source: totalseg
+        totalseg:
+          organs:
+            - liver
+            - spleen
+            - kidney_left
+            - kidney_right
+            - pancreas
+            - gallbladder
+            - stomach
+            - duodenum
+            - small_bowel
+            - colon
+            - esophagus
+            - adrenal_gland_left
+            - adrenal_gland_right
+            - urinary_bladder
+      model:
+        out_channels: 15
+
+    - id: taskB_muscles
+      description: "Muscle segmentation (10 muscles)"
+      data:
+        source: totalseg
+        totalseg:
+          organs:
+            - gluteus_maximus_left
+            - gluteus_maximus_right
+            - gluteus_medius_left
+            - gluteus_medius_right
+            - gluteus_minimus_left
+            - gluteus_minimus_right
+            - iliopsoas_left
+            - iliopsoas_right
+            - autochthon_left
+            - autochthon_right
+      model:
+        out_channels: 11
+
+    - id: taskC_vessels
+      description: "Abdominal vessel segmentation (7 vessels)"
+      data:
+        source: totalseg
+        totalseg:
+          organs:
+            - aorta
+            - inferior_vena_cava
+            - portal_vein_and_splenic_vein
+            - iliac_artery_left
+            - iliac_artery_right
+            - iliac_vena_left
+            - iliac_vena_right
+      model:
+        out_channels: 8
+
+    - id: taskD_thorax
+      description: "Thoracic organ segmentation (11 structures)"
+      data:
+        source: totalseg
+        totalseg:
+          organs:
+            - lung_upper_lobe_left
+            - lung_lower_lobe_left
+            - lung_upper_lobe_right
+            - lung_middle_lobe_right
+            - lung_lower_lobe_right
+            - trachea
+            - pulmonary_artery
+            - heart_atrium_left
+            - heart_atrium_right
+            - heart_ventricle_left
+            - heart_ventricle_right
+      model:
+        out_channels: 12
+
+    - id: taskE_spine
+      description: "Spine structure segmentation (10 structures)"
+      data:
+        source: totalseg
+        totalseg:
+          organs:
+            - vertebrae_C3
+            - vertebrae_C7
+            - vertebrae_T1
+            - vertebrae_T6
+            - vertebrae_T12
+            - vertebrae_L1
+            - vertebrae_L5
+            - sacrum
+            - rib_left_1
+            - rib_right_1
+      model:
+        out_channels: 11

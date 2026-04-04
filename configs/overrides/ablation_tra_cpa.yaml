@@ -1,0 +1,9 @@
+# Ablation: TRA + CPA (prototypes for replay anti-forgetting, no gate)
+# Tests whether prototype-based KD improves over plain TRA without gating.
+method:
+  kd:
+    teacher:
+      adapter_type: gated_residual
+      min_gate: 1.0  # gate always 1.0 = no modulation (CGAD disabled)
+    prototype:
+      weight: 0.3    # CPA enabled

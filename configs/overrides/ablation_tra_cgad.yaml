@@ -1,0 +1,9 @@
+# Ablation: TRA + CGAD (gate modulates KD, no prototypes)
+# Tests whether confidence-gated distillation improves over plain TRA.
+method:
+  kd:
+    teacher:
+      adapter_type: gated_residual
+      min_gate: 0.1  # CGAD enabled (default)
+    prototype:
+      weight: 0.0    # CPA disabled

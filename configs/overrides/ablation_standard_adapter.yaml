@@ -1,0 +1,8 @@
+# Ablation: Standard adapter only (no TRA, no CGAD, no CPA)
+# Baseline: plain output adapter without any GRACE components.
+method:
+  kd:
+    teacher:
+      adapter_type: standard
+    prototype:
+      weight: 0.0

@@ -1,0 +1,8 @@
+# DER++: Dark Experience Replay (Buzzega et al., NeurIPS 2020)
+# Replay with logit matching for stronger anti-forgetting.
+method:
+  name: der++
+  der:
+    buffer_size: 200
+    alpha: 0.5    # logit matching weight
+    beta: 0.5     # standard replay CE weight

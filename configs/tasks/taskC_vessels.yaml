@@ -1,0 +1,48 @@
+# Task C: Abdominal Vessel Segmentation (TotalSegmentator)
+#
+# 8 classes: 0=background, 1-7=vessels (see below)
+#
+# Major abdominal and pelvic vessels in TotalSegmentator.
+# No overlap with Tasks A (organs), B (muscles), D (thorax), E (spine).
+
+task:
+  id: taskC_vessels
+  description: "Abdominal vessel segmentation (7 vessels)"
+
+  classes:
+    0: background
+    1: aorta
+    2: inferior_vena_cava
+    3: portal_vein_and_splenic_vein
+    4: iliac_artery_left
+    5: iliac_artery_right
+    6: iliac_vena_left
+    7: iliac_vena_right
+
+  num_classes: 8  # including background
+
+  organs:
+    - aorta
+    - inferior_vena_cava
+    - portal_vein_and_splenic_vein
+    - iliac_artery_left
+    - iliac_artery_right
+    - iliac_vena_left
+    - iliac_vena_right
+
+# Data override: use these vessels in the TotalSeg loader
+data:
+  source: totalseg
+  totalseg:
+    organs:
+      - aorta
+      - inferior_vena_cava
+      - portal_vein_and_splenic_vein
+      - iliac_artery_left
+      - iliac_artery_right
+      - iliac_vena_left
+      - iliac_vena_right
+
+# Model override: 8 output channels (BG + 7 vessels)
+model:
+  out_channels: 8

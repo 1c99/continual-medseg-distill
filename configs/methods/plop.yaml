@@ -1,0 +1,9 @@
+# PLOP: Pooled Local Distillation (Douillard et al., CVPR 2021)
+# Self-distillation with multi-scale pooled feature matching.
+method:
+  name: plop
+  plop:
+    pod_weight: 0.01
+    pseudo_weight: 1.0
+    pod_scales: [1, 2, 4]
+    pod_normalize: true

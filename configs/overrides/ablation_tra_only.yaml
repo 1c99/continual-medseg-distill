@@ -1,0 +1,9 @@
+# Ablation: TRA only (frozen core + per-task residuals, no gate, no prototypes)
+# Tests whether the task-residual adapter structure alone helps retention.
+method:
+  kd:
+    teacher:
+      adapter_type: gated_residual
+      min_gate: 1.0  # gate always 1.0 = no modulation (CGAD disabled)
+    prototype:
+      weight: 0.0    # CPA disabled

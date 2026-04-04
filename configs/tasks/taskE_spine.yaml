@@ -1,0 +1,58 @@
+# Task E: Spine Structure Segmentation (TotalSegmentator)
+#
+# 11 classes: 0=background, 1-10=spine structures (see below)
+#
+# Representative vertebrae (one per spinal region), sacrum, and ribs.
+# Using a subset of vertebrae/ribs to keep class count manageable (~10).
+# No overlap with Tasks A (organs), B (muscles), C (vessels), D (thorax).
+
+task:
+  id: taskE_spine
+  description: "Spine structure segmentation (10 structures)"
+
+  classes:
+    0: background
+    1: vertebrae_C3
+    2: vertebrae_C7
+    3: vertebrae_T1
+    4: vertebrae_T6
+    5: vertebrae_T12
+    6: vertebrae_L1
+    7: vertebrae_L5
+    8: sacrum
+    9: rib_left_1
+    10: rib_right_1
+
+  num_classes: 11  # including background
+
+  organs:
+    - vertebrae_C3
+    - vertebrae_C7
+    - vertebrae_T1
+    - vertebrae_T6
+    - vertebrae_T12
+    - vertebrae_L1
+    - vertebrae_L5
+    - sacrum
+    - rib_left_1
+    - rib_right_1
+
+# Data override: use these spine structures in the TotalSeg loader
+data:
+  source: totalseg
+  totalseg:
+    organs:
+      - vertebrae_C3
+      - vertebrae_C7
+      - vertebrae_T1
+      - vertebrae_T6
+      - vertebrae_T12
+      - vertebrae_L1
+      - vertebrae_L5
+      - sacrum
+      - rib_left_1
+      - rib_right_1
+
+# Model override: 11 output channels (BG + 10 spine structures)
+model:
+  out_channels: 11

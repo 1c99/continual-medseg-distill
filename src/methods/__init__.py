@@ -3,6 +3,9 @@ from .finetune import FineTuneMethod
 from .replay import ReplayMethod
 from .distill import DistillMethod
 from .distill_replay_ewc import DistillReplayEWCMethod
+from .plop import PLOPMethod
+from .mib import MiBMethod
+from .der import DERPlusPlusMethod
 
 
 def create_method(cfg):
@@ -26,4 +29,10 @@ def create_method(cfg):
         return DistillMethod(lwf_cfg)
     if name == "distill_replay_ewc":
         return DistillReplayEWCMethod(cfg)
+    if name == "plop":
+        return PLOPMethod(cfg)
+    if name == "mib":
+        return MiBMethod(cfg)
+    if name in ("der", "der++"):
+        return DERPlusPlusMethod(cfg)
     raise ValueError(f"Unknown method: {name}")

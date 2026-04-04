@@ -1,0 +1,61 @@
+# Task D: Thoracic Organ Segmentation (TotalSegmentator)
+#
+# 12 classes: 0=background, 1-11=thoracic structures (see below)
+#
+# Lung lobes, trachea, pulmonary artery, and heart chambers.
+# No overlap with Tasks A (organs), B (muscles), C (vessels), E (spine).
+# Note: pulmonary_artery is thoracic, not abdominal, so placed here rather than Task C.
+
+task:
+  id: taskD_thorax
+  description: "Thoracic organ segmentation (11 structures)"
+
+  classes:
+    0: background
+    1: lung_upper_lobe_left
+    2: lung_lower_lobe_left
+    3: lung_upper_lobe_right
+    4: lung_middle_lobe_right
+    5: lung_lower_lobe_right
+    6: trachea
+    7: pulmonary_artery
+    8: heart_atrium_left
+    9: heart_atrium_right
+    10: heart_ventricle_left
+    11: heart_ventricle_right
+
+  num_classes: 12  # including background
+
+  organs:
+    - lung_upper_lobe_left
+    - lung_lower_lobe_left
+    - lung_upper_lobe_right
+    - lung_middle_lobe_right
+    - lung_lower_lobe_right
+    - trachea
+    - pulmonary_artery
+    - heart_atrium_left
+    - heart_atrium_right
+    - heart_ventricle_left
+    - heart_ventricle_right
+
+# Data override: use these thoracic structures in the TotalSeg loader
+data:
+  source: totalseg
+  totalseg:
+    organs:
+      - lung_upper_lobe_left
+      - lung_lower_lobe_left
+      - lung_upper_lobe_right
+      - lung_middle_lobe_right
+      - lung_lower_lobe_right
+      - trachea
+      - pulmonary_artery
+      - heart_atrium_left
+      - heart_atrium_right
+      - heart_ventricle_left
+      - heart_ventricle_right
+
+# Model override: 12 output channels (BG + 11 thoracic structures)
+model:
+  out_channels: 12
