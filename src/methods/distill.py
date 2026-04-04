@@ -361,8 +361,9 @@ class DistillMethod(ContinualMethod):
     ) -> None:
         """Briefly train the new adapter residual on this task's data.
 
-        Delegates to the same logic as DistillReplayEWCMethod. See that
-        class's docstring for details.
+        Backbone, core, and gate are frozen. Only the new 1x1 residual
+        is trained.  Controlled by ``method.kd.adapter_pretrain.steps``
+        (default 200) and ``method.kd.adapter_pretrain.lr`` (default 1e-3).
         """
         if not self.teacher.is_external:
             return
@@ -381,13 +382,24 @@ class DistillMethod(ContinualMethod):
         if device == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
 
+        # Only train the new residual — freeze everything else
+        for p in adapter.residuals[task_id].parameters():
+            p.requires_grad = True
         trainable = list(adapter.residuals[task_id].parameters())
+        if hasattr(adapter, "core"):
+            for p in adapter.core.parameters():
+                p.requires_grad = False
+        if hasattr(adapter, "gate_head"):
+            for p in adapter.gate_head.parameters():
+                p.requires_grad = False
+
         if not trainable:
             return
 
         optimizer = torch.optim.Adam(trainable, lr=lr)
         backend.to(device)
         adapter.train()
+        is_gated = getattr(backend, "_gated", False)
         task_logger.info(
             f"  Pretraining adapter residual for '{task_id}' ({max_steps} steps)"
         )
@@ -401,7 +413,6 @@ class DistillMethod(ContinualMethod):
             with torch.no_grad():
                 features = backend._extract_features_3d(x)
             B, C_in, D, H, W = x.shape
-            is_gated = getattr(backend, "_gated", False)
             if is_gated:
                 logits, _ = adapter(features, (D, H, W))
             else:

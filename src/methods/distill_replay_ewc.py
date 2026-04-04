@@ -521,9 +521,9 @@ class DistillReplayEWCMethod(ReplayMethod):
         produces random logits for the new task, making KD useless.
 
         This method runs a short supervised loop (backbone frozen, core
-        frozen, only the new residual + gate trainable) and accumulates
-        prototypes.  Controlled by ``method.kd.adapter_pretrain_steps``
-        (default 200).
+        frozen, gate frozen, only the new residual trainable) and accumulates
+        prototypes.  Controlled by ``method.kd.adapter_pretrain.steps``
+        (default 200) and ``method.kd.adapter_pretrain.lr`` (default 1e-3).
         """
         if not self.teacher.is_external:
             return
@@ -543,7 +543,8 @@ class DistillReplayEWCMethod(ReplayMethod):
         if device == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        # Only train the new residual (and gate if not frozen)
+        # Only train the new residual — gate stays frozen to preserve
+        # old-task calibration (trained during initial adapter pretraining).
         trainable_params = []
         is_gated = getattr(backend, "_gated", False)
 
@@ -554,10 +555,13 @@ class DistillReplayEWCMethod(ReplayMethod):
         else:
             return  # no residual to train
 
+        # Explicitly freeze gate and core to prevent accidental updates
         if is_gated and hasattr(adapter, "gate_head"):
             for p in adapter.gate_head.parameters():
-                if p.requires_grad:
-                    trainable_params.append(p)
+                p.requires_grad = False
+        if hasattr(adapter, "core"):
+            for p in adapter.core.parameters():
+                p.requires_grad = False
 
         if not trainable_params:
             return
@@ -586,23 +590,10 @@ class DistillReplayEWCMethod(ReplayMethod):
             target_shape = (D, H, W)
 
             if is_gated:
-                logits, gate = adapter(features, target_shape)
-                seg_loss = F.cross_entropy(logits, y) + (
-                    1.0 - 2.0 * (
-                        (F.softmax(logits, dim=1) * F.one_hot(y, out_channels).permute(0, 4, 1, 2, 3).float()).sum(dim=1)
-                    ).mean()
-                ) if logits.shape[1] == out_channels else F.cross_entropy(logits, y)
+                logits, _ = adapter(features, target_shape)
+                loss = F.cross_entropy(logits, y)
 
-                # Simplified DiceCE: just use CE for brief pretraining
-                seg_loss = F.cross_entropy(logits, y)
-
-                # Gate supervision
-                with torch.no_grad():
-                    pred_correct = (logits.argmax(1) == y).float().unsqueeze(1)
-                gate_loss = F.binary_cross_entropy(gate, pred_correct)
-                loss = seg_loss + 0.5 * gate_loss
-
-                # Accumulate prototypes
+                # Accumulate prototypes for this task
                 with torch.no_grad():
                     adapter.update_prototypes(features, y, task_id, out_channels)
             else:
