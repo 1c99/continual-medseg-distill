@@ -399,6 +399,15 @@ def run_task_sequence(
         train_loader, val_loader = create_loaders(task_cfg, dist_ctx=dist_ctx)
         val_loaders[task_id] = (val_loader, task_cfg)
 
+        # Briefly pretrain external teacher's adapter residual for this task
+        # (new residuals are randomly initialized — useless without training)
+        if hasattr(method, "pretrain_teacher_for_task"):
+            task_out_channels = task_override.get("model", {}).get("out_channels")
+            if task_out_channels is not None:
+                method.pretrain_teacher_for_task(
+                    train_loader, task_id, task_out_channels, task_cfg, logger,
+                )
+
         # Train on this task
         model = train(
             model,

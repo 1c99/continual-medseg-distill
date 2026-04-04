@@ -506,6 +506,121 @@ class DistillReplayEWCMethod(ReplayMethod):
         if self.teacher.is_external:
             self.teacher.reconfigure_adapter(out_channels, task_id=task_id)
 
+    def pretrain_teacher_for_task(
+        self,
+        train_loader,
+        task_id: str,
+        out_channels: int,
+        cfg: Dict,
+        task_logger,
+    ) -> None:
+        """Briefly train the new adapter residual on this task's data.
+
+        When a new task arrives, ``reconfigure_adapter`` adds a randomly
+        initialized 1x1 Conv3d residual.  Without training, the teacher
+        produces random logits for the new task, making KD useless.
+
+        This method runs a short supervised loop (backbone frozen, core
+        frozen, only the new residual + gate trainable) and accumulates
+        prototypes.  Controlled by ``method.kd.adapter_pretrain_steps``
+        (default 200).
+        """
+        if not self.teacher.is_external:
+            return
+        backend = self.teacher._backend
+        adapter = getattr(backend, "_adapter", None)
+        if adapter is None:
+            return
+
+        pretrain_cfg = self.cfg.get("method", {}).get("kd", {}).get("adapter_pretrain", {})
+        max_steps = int(pretrain_cfg.get("steps", 200))
+        lr = float(pretrain_cfg.get("lr", 1e-3))
+
+        if max_steps <= 0:
+            return
+
+        device = cfg.get("runtime", {}).get("device", "cpu")
+        if device == "auto":
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        # Only train the new residual (and gate if not frozen)
+        trainable_params = []
+        is_gated = getattr(backend, "_gated", False)
+
+        if hasattr(adapter, "residuals") and task_id in adapter.residuals:
+            for p in adapter.residuals[task_id].parameters():
+                p.requires_grad = True
+                trainable_params.append(p)
+        else:
+            return  # no residual to train
+
+        if is_gated and hasattr(adapter, "gate_head"):
+            for p in adapter.gate_head.parameters():
+                if p.requires_grad:
+                    trainable_params.append(p)
+
+        if not trainable_params:
+            return
+
+        optimizer = torch.optim.Adam(trainable_params, lr=lr)
+        backend.to(device)
+        adapter.train()
+
+        task_logger.info(
+            f"  Pretraining adapter residual for '{task_id}' "
+            f"({max_steps} steps, lr={lr}, params={sum(p.numel() for p in trainable_params)})"
+        )
+
+        steps = 0
+        for batch in train_loader:
+            if steps >= max_steps:
+                break
+
+            x = batch["image"].to(device)
+            y = batch["label"].to(device)
+
+            with torch.no_grad():
+                features = backend._extract_features_3d(x)
+
+            B, C_in, D, H, W = x.shape
+            target_shape = (D, H, W)
+
+            if is_gated:
+                logits, gate = adapter(features, target_shape)
+                seg_loss = F.cross_entropy(logits, y) + (
+                    1.0 - 2.0 * (
+                        (F.softmax(logits, dim=1) * F.one_hot(y, out_channels).permute(0, 4, 1, 2, 3).float()).sum(dim=1)
+                    ).mean()
+                ) if logits.shape[1] == out_channels else F.cross_entropy(logits, y)
+
+                # Simplified DiceCE: just use CE for brief pretraining
+                seg_loss = F.cross_entropy(logits, y)
+
+                # Gate supervision
+                with torch.no_grad():
+                    pred_correct = (logits.argmax(1) == y).float().unsqueeze(1)
+                gate_loss = F.binary_cross_entropy(gate, pred_correct)
+                loss = seg_loss + 0.5 * gate_loss
+
+                # Accumulate prototypes
+                with torch.no_grad():
+                    adapter.update_prototypes(features, y, task_id, out_channels)
+            else:
+                logits = adapter(features, target_shape)
+                loss = F.cross_entropy(logits, y)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            steps += 1
+
+        adapter.eval()
+        proto_count = adapter.num_prototypes if hasattr(adapter, "num_prototypes") else 0
+        task_logger.info(
+            f"  Adapter residual pretrained: {steps} steps, "
+            f"{proto_count} prototypes stored"
+        )
+
     def post_task_update(self, model: nn.Module, **kwargs) -> None:
         # Reset for next task
         self._reference_loss = None

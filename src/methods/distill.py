@@ -351,6 +351,70 @@ class DistillMethod(ContinualMethod):
         if self.teacher.is_external:
             self.teacher.reconfigure_adapter(out_channels, task_id=task_id)
 
+    def pretrain_teacher_for_task(
+        self,
+        train_loader,
+        task_id: str,
+        out_channels: int,
+        cfg: Dict,
+        task_logger,
+    ) -> None:
+        """Briefly train the new adapter residual on this task's data.
+
+        Delegates to the same logic as DistillReplayEWCMethod. See that
+        class's docstring for details.
+        """
+        if not self.teacher.is_external:
+            return
+        backend = self.teacher._backend
+        adapter = getattr(backend, "_adapter", None)
+        if adapter is None or not hasattr(adapter, "residuals"):
+            return
+
+        pretrain_cfg = self.cfg.get("method", {}).get("kd", {}).get("adapter_pretrain", {})
+        max_steps = int(pretrain_cfg.get("steps", 200))
+        lr = float(pretrain_cfg.get("lr", 1e-3))
+        if max_steps <= 0 or task_id not in adapter.residuals:
+            return
+
+        device = cfg.get("runtime", {}).get("device", "cpu")
+        if device == "auto":
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        trainable = list(adapter.residuals[task_id].parameters())
+        if not trainable:
+            return
+
+        optimizer = torch.optim.Adam(trainable, lr=lr)
+        backend.to(device)
+        adapter.train()
+        task_logger.info(
+            f"  Pretraining adapter residual for '{task_id}' ({max_steps} steps)"
+        )
+
+        steps = 0
+        for batch in train_loader:
+            if steps >= max_steps:
+                break
+            x = batch["image"].to(device)
+            y = batch["label"].to(device)
+            with torch.no_grad():
+                features = backend._extract_features_3d(x)
+            B, C_in, D, H, W = x.shape
+            is_gated = getattr(backend, "_gated", False)
+            if is_gated:
+                logits, _ = adapter(features, (D, H, W))
+            else:
+                logits = adapter(features, (D, H, W))
+            loss = F.cross_entropy(logits, y)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            steps += 1
+
+        adapter.eval()
+        task_logger.info(f"  Adapter residual pretrained: {steps} steps")
+
     # ---- lifecycle ----
 
     def post_task_update(self, model: nn.Module, **kwargs) -> None:
