@@ -37,11 +37,15 @@ class PLOPMethod(ContinualMethod):
 
         self.pod_weight = float(plop_cfg.get("pod_weight", 0.01))
         self.pseudo_weight = float(plop_cfg.get("pseudo_weight", 1.0))
+        # pod_scales: spatial subdivision factors. scale=1 → global pool,
+        # scale=2 → 2 strips per dim, scale=4 → 4 strips per dim.
         self.pod_scales = list(plop_cfg.get("pod_scales", [1, 2, 4]))
         self.pod_normalize = bool(plop_cfg.get("pod_normalize", True))
 
         self._old_model: nn.Module | None = None
         self._old_num_classes: int = 0
+
+    # ---- POD: Pooled Output Distillation (Algorithm 1) ----
 
     def _pod_loss(
         self,
@@ -50,8 +54,18 @@ class PLOPMethod(ContinualMethod):
     ) -> torch.Tensor:
         """Pooled output distillation across multiple spatial scales.
 
-        For each feature map, pool spatially at multiple scales and compute
-        L2 distance between old and new representations.
+        For each intermediate feature map and each scale s, divide each
+        spatial dimension into s strips, width-pool each strip (sum over that
+        dimension), L2-normalize, and compute squared L2 distance between
+        old and new representations.
+
+        This is faithful to Algorithm 1 in Douillard et al., CVPR 2021:
+        for each feature h of shape (B, C, *spatial), for each scale s,
+        for each spatial dimension d:
+          - split h into s strips along d
+          - for each strip, sum-pool along d → (B, C, *remaining_spatial)
+          - L2-normalize along channel dim
+          - accumulate ||h_new - h_old||^2
         """
         loss = torch.tensor(0.0, device=features_new[0].device)
         count = 0
@@ -59,56 +73,125 @@ class PLOPMethod(ContinualMethod):
         for f_new, f_old in zip(features_new, features_old):
             if f_new.shape != f_old.shape:
                 continue
-            for scale in self.pod_scales:
-                # Pool along each spatial dimension
-                for dim in range(2, f_new.ndim):
-                    # Chunk feature map along this dimension
-                    n_chunks = max(f_new.shape[dim] // scale, 1)
-                    chunks_new = f_new.chunk(n_chunks, dim=dim)
-                    chunks_old = f_old.chunk(n_chunks, dim=dim)
 
-                    for c_new, c_old in zip(chunks_new, chunks_old):
-                        # Width-level pooling: average over the spatial dim
-                        pool_dims = list(range(2, c_new.ndim))
-                        p_new = c_new.mean(dim=pool_dims)
-                        p_old = c_old.mean(dim=pool_dims)
+            for scale in self.pod_scales:
+                # For each spatial dimension, split into `scale` strips
+                for dim in range(2, f_new.ndim):
+                    dim_size = f_new.shape[dim]
+                    n_strips = min(scale, dim_size)
+                    if n_strips < 1:
+                        continue
+
+                    # Split into strips along this dim
+                    strip_size = dim_size // n_strips
+                    for s in range(n_strips):
+                        start = s * strip_size
+                        end = start + strip_size if s < n_strips - 1 else dim_size
+
+                        # Slice the strip
+                        slices = [slice(None)] * f_new.ndim
+                        slices[dim] = slice(start, end)
+
+                        strip_new = f_new[tuple(slices)]
+                        strip_old = f_old[tuple(slices)]
+
+                        # Width-pool: sum over this dimension
+                        p_new = strip_new.sum(dim=dim)
+                        p_old = strip_old.sum(dim=dim)
+
+                        # Flatten spatial dims, keep batch and channel
+                        p_new = p_new.flatten(2)  # (B, C, -1)
+                        p_old = p_old.flatten(2)
 
                         if self.pod_normalize:
                             p_new = F.normalize(p_new, dim=1)
                             p_old = F.normalize(p_old, dim=1)
 
-                        loss = loss + F.mse_loss(p_new, p_old)
+                        loss = loss + torch.frobenius_norm(p_new - p_old) ** 2
                         count += 1
 
         return loss / max(count, 1)
+
+    # ---- Pseudo-labeling ----
 
     def _pseudo_label_loss(
         self,
         logits: torch.Tensor,
         target: torch.Tensor,
+        old_logits: torch.Tensor,
     ) -> torch.Tensor:
         """Pseudo-labeling: old model predictions on background pixels.
 
-        Where the ground truth is background (class 0) in the new task, use
-        the old model's argmax prediction as the target for old classes.
+        Where the ground truth is background (class 0) in the new task,
+        the old model may have assigned these pixels to old classes.
+        Use the old model's soft predictions as the target via KD loss
+        on background pixels only.
         """
-        if self._old_model is None:
-            return torch.tensor(0.0, device=logits.device)
-
-        bg_mask = target == 0
+        bg_mask = target == 0  # (B, *spatial)
         if bg_mask.sum() == 0:
             return torch.tensor(0.0, device=logits.device)
 
-        # Only apply CE on background voxels, limited to old class channels
         old_ch = min(self._old_num_classes, logits.shape[1])
-        logits_bg = logits[:, :old_ch][bg_mask.unsqueeze(1).expand(-1, old_ch, *[-1] * (target.ndim - 1))]
-        logits_bg = logits_bg.view(-1, old_ch)
+        if old_ch <= 1:
+            return torch.tensor(0.0, device=logits.device)
 
-        with torch.no_grad():
-            old_out = self._old_model(logits.new_zeros(1))  # dummy — we need actual input
-        # Simplified: use standard CE on background with old class predictions
-        # In practice, pseudo_label_loss provides marginal gain; the POD loss is primary
-        return torch.tensor(0.0, device=logits.device)
+        # Expand bg_mask to cover channel dim: (B, C, *spatial)
+        bg_expanded = bg_mask.unsqueeze(1).expand_as(logits[:, :old_ch])
+
+        # Extract background voxels for old class channels
+        # Shape: (N_bg, old_ch) where N_bg = number of background voxels
+        new_bg = logits[:, :old_ch][bg_expanded].view(-1, old_ch)
+        old_bg = old_logits[:, :old_ch][bg_expanded].view(-1, old_ch)
+
+        T = 2.0
+        return F.kl_div(
+            F.log_softmax(new_bg / T, dim=1),
+            F.softmax(old_bg / T, dim=1),
+            reduction="batchmean",
+        ) * (T * T)
+
+    # ---- Feature extraction via hooks ----
+
+    def _extract_features(
+        self, model: nn.Module, x: torch.Tensor, *, no_grad: bool = False
+    ) -> tuple[torch.Tensor, List[torch.Tensor]]:
+        """Forward pass with hooks to capture intermediate encoder features.
+
+        Returns (logits, list_of_intermediate_features).
+        """
+        features: List[torch.Tensor] = []
+        hooks = []
+
+        def hook_fn(module, input, output):
+            if isinstance(output, torch.Tensor):
+                features.append(output)
+
+        from src.engine.distributed import unwrap_model
+        base = unwrap_model(model)
+
+        # Hook into MONAI UNet's downsampling conv layers
+        for name, module in base.named_modules():
+            if isinstance(module, nn.Conv3d) and "down" in name.lower():
+                hooks.append(module.register_forward_hook(hook_fn))
+
+        # Fallback: hook every other Conv3d (encoder layers)
+        if not hooks:
+            conv_modules = [m for m in base.modules() if isinstance(m, nn.Conv3d)]
+            for m in conv_modules[::2][:4]:
+                hooks.append(m.register_forward_hook(hook_fn))
+
+        if no_grad:
+            with torch.no_grad():
+                logits = model(x)
+        else:
+            logits = model(x)
+
+        for h in hooks:
+            h.remove()
+
+        return logits, features
+
+    # ---- Training loss ----
 
     def training_loss(
         self, model: nn.Module, batch: Dict, device: str
@@ -116,68 +199,26 @@ class PLOPMethod(ContinualMethod):
         x = batch["image"].to(device)
         y = batch["label"].to(device)
 
-        # Forward through current model
-        logits = model(x)
+        if self._old_model is None:
+            logits = model(x)
+            return self._compute_loss(logits, y)
+
+        # Single forward pass each, capturing intermediate features
+        logits, features_new = self._extract_features(model, x)
+        old_logits, features_old = self._extract_features(
+            self._old_model, x, no_grad=True
+        )
+
+        # Segmentation loss on current task
         seg_loss = self._compute_loss(logits, y)
 
-        if self._old_model is None:
-            return seg_loss
-
-        # Get intermediate features from both models
-        # Use hooks to capture encoder features
-        features_new = self._extract_features(model, x)
-        with torch.no_grad():
-            features_old = self._extract_features(self._old_model, x)
-
+        # POD: multi-scale pooled distillation on intermediate features
         pod = self._pod_loss(features_new, features_old)
 
-        # Output-level distillation (soft KD on old classes)
-        with torch.no_grad():
-            old_logits = self._old_model(x)
+        # Pseudo-labeling: KD on background pixels using old model predictions
+        pseudo = self._pseudo_label_loss(logits, y, old_logits)
 
-        T = 2.0
-        old_ch = min(old_logits.shape[1], logits.shape[1])
-        kd = F.kl_div(
-            F.log_softmax(logits[:, :old_ch] / T, dim=1),
-            F.softmax(old_logits[:, :old_ch] / T, dim=1),
-            reduction="batchmean",
-        ) * (T * T)
-
-        return seg_loss + self.pod_weight * pod + self.pseudo_weight * kd
-
-    def _extract_features(
-        self, model: nn.Module, x: torch.Tensor
-    ) -> List[torch.Tensor]:
-        """Extract intermediate features via hooks on encoder blocks."""
-        features = []
-        hooks = []
-
-        def hook_fn(module, input, output):
-            if isinstance(output, torch.Tensor):
-                features.append(output)
-
-        # Register hooks on all Conv3d/ConvTranspose3d in the encoder
-        from src.engine.distributed import unwrap_model
-        base = unwrap_model(model)
-        # Try to hook into MONAI UNet's model blocks
-        for name, module in base.named_modules():
-            if isinstance(module, (nn.Conv3d,)) and "down" in name.lower():
-                hooks.append(module.register_forward_hook(hook_fn))
-
-        # If no named down blocks, hook all Conv3d layers
-        if not hooks:
-            conv_modules = [m for m in base.modules() if isinstance(m, nn.Conv3d)]
-            # Take every other conv (roughly encoder layers)
-            for m in conv_modules[::2][:4]:
-                hooks.append(m.register_forward_hook(hook_fn))
-
-        with torch.no_grad() if model is self._old_model else torch.enable_grad():
-            _ = model(x)
-
-        for h in hooks:
-            h.remove()
-
-        return features
+        return seg_loss + self.pod_weight * pod + self.pseudo_weight * pseudo
 
     def post_task_update(self, model: nn.Module, **kwargs) -> None:
         from src.engine.distributed import unwrap_model

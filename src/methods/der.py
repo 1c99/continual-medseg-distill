@@ -43,6 +43,7 @@ class DERPlusPlusMethod(ContinualMethod):
 
         # Buffer stores (image, label, logits, task_id)
         self.memory: List[Dict[str, torch.Tensor]] = []
+        self._n_seen: int = 0  # total samples seen (for reservoir sampling)
         self._current_task_id: str | None = None
 
     def set_current_task(self, task_id: str) -> None:
@@ -53,7 +54,12 @@ class DERPlusPlusMethod(ContinualMethod):
         batch: Dict[str, torch.Tensor],
         logits: torch.Tensor,
     ) -> None:
-        """Store samples WITH their logits (dark experience)."""
+        """Store samples WITH their logits using reservoir sampling.
+
+        Reservoir sampling (Vitter, 1985): maintains a uniform sample over
+        all seen examples in a fixed-size buffer. For each new sample n,
+        with probability buffer_size/n, replace a random buffer entry.
+        """
         x = batch["image"].detach().cpu()
         y = batch["label"].detach().cpu()
         z = logits.detach().cpu()
@@ -66,11 +72,16 @@ class DERPlusPlusMethod(ContinualMethod):
             }
             if self._current_task_id is not None:
                 entry["task_id"] = self._current_task_id
-            self.memory.append(entry)
 
-        # Reservoir sampling for fixed buffer
-        if len(self.memory) > self.buffer_size:
-            self.memory = self.memory[-self.buffer_size:]
+            self._n_seen += 1
+
+            if len(self.memory) < self.buffer_size:
+                self.memory.append(entry)
+            else:
+                # Reservoir sampling: replace with probability buffer_size / n_seen
+                j = random.randrange(self._n_seen)
+                if j < self.buffer_size:
+                    self.memory[j] = entry
 
     def _sample_memory(self, k: int) -> List[Dict[str, torch.Tensor]] | None:
         if len(self.memory) == 0:
@@ -84,15 +95,15 @@ class DERPlusPlusMethod(ContinualMethod):
         x = batch["image"].to(device)
         y = batch["label"].to(device)
 
+        # Sample replay BEFORE inserting current batch to avoid self-replay bias
+        samples = self._sample_memory(k=x.shape[0])
+
         # Current task forward
         logits = model(x)
         seg_loss = self._compute_loss(logits, y)
 
-        # Store current batch with logits
+        # Store current batch with logits AFTER sampling
         self._push_batch_to_memory(batch, logits)
-
-        # Replay
-        samples = self._sample_memory(k=x.shape[0])
         if samples is None:
             return seg_loss
 

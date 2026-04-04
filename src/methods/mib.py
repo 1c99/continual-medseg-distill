@@ -7,9 +7,14 @@ Implements:
 Key idea: In class-incremental segmentation, the "background" class is
 overloaded — it contains both true background AND all unseen future classes.
 MiB handles this by:
-1. Unbiased cross-entropy: redistributes old model's background probability
-   to new classes based on the new model's predictions.
+1. Unbiased cross-entropy (Eq. 4-5): For background-labeled pixels, use the
+   old model's class probabilities as soft targets instead of hard bg label.
+   This prevents the model from being pushed to predict bg on old-class pixels.
 2. Knowledge distillation on old class channels.
+
+In task-incremental mode (separate heads per task), the unbiased CE still
+helps: during Task B training, any replay/shared representations that feed
+Task A's head benefit from the soft background target.
 """
 from __future__ import annotations
 
@@ -35,8 +40,7 @@ class MiBMethod(ContinualMethod):
         mcfg = cfg.get("method", {})
         mib_cfg = mcfg.get("mib", {})
 
-        self.kd_weight = float(mib_cfg.get("kd_weight", 10.0))
-        self.unkd_weight = float(mib_cfg.get("unkd_weight", 10.0))
+        self.kd_weight = float(mib_cfg.get("kd_weight", 1.0))
         self.temperature = float(mib_cfg.get("temperature", 2.0))
 
         self._old_model: nn.Module | None = None
@@ -46,39 +50,45 @@ class MiBMethod(ContinualMethod):
         self,
         logits: torch.Tensor,
         target: torch.Tensor,
-        old_logits: torch.Tensor | None,
+        old_logits: torch.Tensor,
     ) -> torch.Tensor:
-        """Unbiased cross-entropy that accounts for background shift.
+        """Unbiased cross-entropy per Cermelli et al. Eqs 4-5.
 
-        For new-task training, background (class 0) in the target may contain
-        pixels that belong to old classes. Adjust by using old model's
-        class probabilities to re-weight the background probability.
+        For pixels labeled as background (class 0), the old model's per-class
+        soft predictions are used as targets instead of the hard bg label.
+        This prevents the model from collapsing old-class representations
+        into background.
+
+        For non-background pixels, standard cross-entropy is used.
         """
-        if old_logits is None or self._old_num_classes <= 1:
-            return self._compute_loss(logits, target)
+        old_ch = min(self._old_num_classes, logits.shape[1])
+        bg_mask = target == 0  # (B, *spatial)
 
-        # Standard cross-entropy for non-background
-        ce = F.cross_entropy(logits, target, reduction="none")
+        # Non-background pixels: standard CE
+        if (~bg_mask).sum() > 0:
+            non_bg_ce = F.cross_entropy(logits, target, reduction="none")
+            non_bg_loss = non_bg_ce[~bg_mask].mean()
+        else:
+            non_bg_loss = torch.tensor(0.0, device=logits.device)
 
-        # For background pixels, redistribute old model's background probability
-        bg_mask = target == 0
-        if bg_mask.sum() > 0 and old_logits is not None:
-            old_probs = F.softmax(old_logits, dim=1)
-            # Old model's non-background probability = probability it assigns to old classes
-            # This is the probability that the pixel belongs to an old class
-            old_class_prob = 1.0 - old_probs[:, 0:1]  # (B, 1, *spatial)
+        if bg_mask.sum() == 0 or old_ch <= 1:
+            return non_bg_loss + F.cross_entropy(logits, target, reduction="none")[bg_mask].mean() \
+                if bg_mask.sum() > 0 else non_bg_loss
 
-            # Weighted CE: background pixels with high old-class probability
-            # should be down-weighted (they're likely old classes, not true bg)
-            bg_weight = old_probs[:, 0:1].squeeze(1)  # true bg probability
-            # Flatten spatial dims
-            flat_ce = ce[bg_mask]
-            flat_weight = bg_weight[bg_mask]
-            weighted_bg_ce = (flat_ce * flat_weight).mean()
+        # Background pixels: soft CE with old model's distribution as target
+        # Old model gives probability distribution over {bg, old_class_1, ..., old_class_N}
+        # Use this as the soft target for the new model's first old_ch channels.
+        old_probs = F.softmax(old_logits[:, :old_ch], dim=1)  # (B, old_ch, *spatial)
 
-            non_bg_ce = ce[~bg_mask].mean() if (~bg_mask).sum() > 0 else torch.tensor(0.0, device=ce.device)
-            return weighted_bg_ce + non_bg_ce
-        return ce.mean()
+        # New model's log-softmax over all channels (including new classes)
+        new_log_probs = F.log_softmax(logits, dim=1)  # (B, C, *spatial)
+
+        # Soft CE on background voxels: -Σ_c p_old(c) * log(p_new(c))
+        # Only computed over old class channels (bg + old classes)
+        soft_ce = -(old_probs * new_log_probs[:, :old_ch]).sum(dim=1)  # (B, *spatial)
+        bg_loss = soft_ce[bg_mask].mean()
+
+        return non_bg_loss + bg_loss
 
     def _kd_loss(
         self,
@@ -111,7 +121,7 @@ class MiBMethod(ContinualMethod):
         with torch.no_grad():
             old_logits = self._old_model(x)
 
-        # Unbiased CE
+        # Unbiased CE (Eq. 4-5)
         seg_loss = self._unbiased_ce(logits, y, old_logits)
 
         # KD on old class channels
