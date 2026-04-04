@@ -140,7 +140,7 @@ class PLOPMethod(ContinualMethod):
         kd = F.kl_div(
             F.log_softmax(logits[:, :old_ch] / T, dim=1),
             F.softmax(old_logits[:, :old_ch] / T, dim=1),
-            reduction="mean",
+            reduction="batchmean",
         ) * (T * T)
 
         return seg_loss + self.pod_weight * pod + self.pseudo_weight * kd

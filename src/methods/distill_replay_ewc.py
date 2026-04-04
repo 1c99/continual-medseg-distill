@@ -41,6 +41,7 @@ class DistillReplayEWCMethod(ReplayMethod):
 
         self.kd_weight = float(kd_cfg.get("weight", 1.0))
         self.temperature = float(kd_cfg.get("temperature", 2.0))
+        self._current_task_kd = bool(kd_cfg.get("current_task_kd", False))
         self.ewc_weight = float(ewc_cfg.get("weight", 0.1))
         self.fisher_samples = int(ewc_cfg.get("fisher_samples", 64))
 
@@ -266,7 +267,7 @@ class DistillReplayEWCMethod(ReplayMethod):
                 kd = F.kl_div(
                     F.log_softmax(student_logits / T, dim=1),
                     F.softmax(teacher_logits / T, dim=1),
-                    reduction="mean",
+                    reduction="batchmean",
                 ) * (T * T)
 
             total_kd = total_kd + kd
@@ -374,7 +375,7 @@ class DistillReplayEWCMethod(ReplayMethod):
             proto_kd = F.kl_div(
                 F.log_softmax(student_logits / T, dim=1),
                 F.softmax(proto_logits, dim=1),  # proto_logits already at right scale
-                reduction="mean",
+                reduction="batchmean",
             ) * (T * T)
 
             total_proto_kd = total_proto_kd + proto_kd
@@ -399,12 +400,12 @@ class DistillReplayEWCMethod(ReplayMethod):
         if self._reference_loss is None:
             self._reference_loss = base_loss.detach().item()
 
-        # KD on CURRENT TASK data is SKIPPED entirely.
-        # For disjoint tasks (organs→muscles), the teacher (snapshot or external)
-        # produces predictions for the OLD task on NEW task data — this is noise.
-        # KD value comes ONLY from REPLAY data where the teacher is reliable.
+        # KD on CURRENT TASK data: disabled by default for disjoint tasks
+        # (organs->muscles) because the teacher predicts OLD task classes on NEW
+        # task data, which is noise. Enable via method.kd.current_task_kd: true
+        # for shared-label or overlapping-class scenarios.
         kd = torch.tensor(0.0, device=base_loss.device)
-        if False:  # Disabled — current-task KD is noise for disjoint tasks
+        if self._current_task_kd and self.teacher.has_model:
             x = batch["image"].to(base_loss.device)
             student_logits = model(x)
             self.teacher.to(base_loss.device)
@@ -427,7 +428,7 @@ class DistillReplayEWCMethod(ReplayMethod):
                 kd = F.kl_div(
                     F.log_softmax(student_logits / T, dim=1),
                     F.softmax(teacher_logits / T, dim=1),
-                    reduction="mean",
+                    reduction="batchmean",
                 ) * (T * T)
 
         # FIX 1: KD on REPLAY data with teacher head switching

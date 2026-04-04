@@ -3,6 +3,6 @@
 method:
   name: mib
   mib:
-    kd_weight: 10.0
-    unkd_weight: 10.0
+    kd_weight: 1.0
+    unkd_weight: 1.0
     temperature: 2.0

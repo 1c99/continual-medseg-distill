@@ -191,7 +191,7 @@ class DistillMethod(ContinualMethod):
         return F.kl_div(
             F.log_softmax(student_logits / T, dim=1),
             F.softmax(teacher_logits / T, dim=1),
-            reduction="mean",
+            reduction="batchmean",
         ) * (T * T)
 
     def _feature_kd_loss(self) -> torch.Tensor:

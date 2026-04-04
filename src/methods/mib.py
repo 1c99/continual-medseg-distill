@@ -94,7 +94,7 @@ class MiBMethod(ContinualMethod):
         return F.kl_div(
             F.log_softmax(logits[:, :old_ch] / T, dim=1),
             F.softmax(old_logits[:, :old_ch] / T, dim=1),
-            reduction="mean",
+            reduction="batchmean",
         ) * (T * T)
 
     def training_loss(

@@ -3,6 +3,6 @@
 method:
   name: der++
   der:
-    buffer_size: 200
+    buffer_size: 1000
     alpha: 0.5    # logit matching weight
     beta: 0.5     # standard replay CE weight
