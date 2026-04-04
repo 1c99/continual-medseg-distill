@@ -21,4 +21,5 @@ for foundation model distillation (MedSAM2/MedSAM3 -> MONAI UNet / nnU-Net).
 
 ## Current Instructions
 
-See `docs/instruction_20260403.md` for the active research roadmap and experiment plan.
+See `docs/instruction_20260404.md` for the active research roadmap and experiment plan.
+(Previous: `docs/instruction_20260403.md`)
