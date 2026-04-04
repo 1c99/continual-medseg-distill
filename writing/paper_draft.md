@@ -35,15 +35,17 @@ We evaluate on a three-task benchmark from TotalSegmentator [11]: abdominal orga
 
 ## 2. RELATED WORK
 
-**Continual learning for segmentation.** Catastrophic forgetting [12] is particularly acute in segmentation, where the pixel-level decision boundary shifts entirely across tasks. Regularization methods such as EWC [5] and SI [13] penalize changes to important parameters but struggle when task distributions are disjoint. Replay-based approaches [6, 14] maintain a buffer of past samples, providing direct supervision on old tasks. Distillation-based methods are prominent in continual segmentation: LwF [4] uses a frozen student snapshot as teacher; PLOP [7] proposes pooled local distillation to preserve multi-scale features; MiB [8] models the background shift explicitly; and REMINDER [15] combines feature replay with distillation. All of these methods operate exclusively on the student side. When an external teacher is used, it is assumed to be a static oracle. We show this assumption breaks when the teacher requires a task-specific adapter.
+**Continual learning for segmentation.** Catastrophic forgetting [12] is particularly acute in segmentation, where the pixel-level decision boundary shifts entirely across tasks. Regularization methods such as EWC [5] and SI [13] penalize changes to important parameters but struggle when task distributions are disjoint. Replay-based approaches [6, 14] maintain a buffer of past samples, providing direct supervision on old tasks. Distillation-based methods are prominent in continual segmentation: LwF [4] uses a frozen student snapshot as teacher; PLOP [7] proposes pooled local distillation to preserve multi-scale features; MiB [8] models the background shift explicitly; and REMINDER [15] combines feature replay with distillation. In the medical domain, Zhang et al. [34] propose class-specific heads with CLIP embeddings for multi-organ continual segmentation on abdominal CT, and Wu et al. [43] extend HAT to multi-modality organ segmentation. Schwarz et al. [35] argue that single-model CL approaches degrade over long sequences and propose a dual-network knowledge base, motivating our focus on external teacher stability. All of these methods operate exclusively on the student side. When an external teacher is used, it is assumed to be a static oracle. We show this assumption breaks when the teacher requires a task-specific adapter.
 
-**Knowledge distillation in medical imaging.** KD has been widely applied to compress medical segmentation models [16, 17]. Recent work distills from foundation models: KnowSAM [18] uses SAM3 as a teacher for semi-supervised cardiac segmentation, and several approaches [19, 20] distill SAM features for downstream tasks. However, these operate in a single-task setting. The continual extension — where the teacher must serve a growing sequence of tasks with different label spaces — introduces the adapter reliability problem we address.
+**Teacher adaptation in continual learning.** Recent work has begun to address teacher quality in CL distillation. Szatkowski et al. [33] observe that a frozen snapshot teacher's batch normalization statistics diverge from the student's distribution as tasks accumulate, causing KD to degrade; they propose updating teacher BN online. SATCH [41] introduces a small auxiliary teacher trained only on the current task to complement the stale main teacher. However, both approaches operate on snapshot (self-distillation) teachers. No prior work addresses the reliability of an *external* foundation model teacher whose adapter must serve a growing set of semantically distinct tasks — the setting GRACE targets.
+
+**Knowledge distillation in medical imaging.** KD has been widely applied to compress medical segmentation models [16, 17]. Recent work distills from foundation models: KnowSAM [18] uses SAM3 as a teacher for semi-supervised cardiac segmentation, and several approaches [19, 20] distill SAM features for downstream tasks. However, these operate in a single-task setting. Stanton et al. [32] demonstrate that KD fidelity gaps exist even under i.i.d. conditions, and Zhang et al. [39] show that no KD method consistently works under distribution shift — findings that compound in continual settings where each task introduces a label-space shift. The continual extension — where the teacher must serve a growing sequence of tasks with different label spaces — introduces the adapter reliability problem we address.
 
 **Foundation models for medical segmentation.** The Segment Anything Model (SAM) [21] and its medical variants MedSAM [22], MedSAM2 [1], and SAM-Med3D [23] have demonstrated strong zero-shot and few-shot segmentation. These models produce rich visual features via large pre-trained backbones (Hiera for SAM2, ViT for SAM3) but require spatial prompts (bounding boxes, points) rather than producing dense predictions directly. For KD, this necessitates a projection adapter from backbone features to dense logits — the component whose reliability we study.
 
-**Adapter methods.** Lightweight adapters for foundation models — including LoRA [24], prompt tuning [25], and visual adapters [26] — enable parameter-efficient task adaptation. In NLP, adapter composition and residual structures allow multi-task serving from a shared backbone [27]. Our TRA component applies this principle to the teacher's output adapter in continual learning, where the shared core captures generic feature-to-anatomy mappings and per-task residuals specialize to each label space. The key distinction from standard adapter methods is our focus on the *teacher* rather than the model being fine-tuned.
+**Adapter methods.** Lightweight adapters for foundation models — including LoRA [24], prompt tuning [25], and visual adapters [26] — enable parameter-efficient task adaptation. O-LoRA [36] learns orthogonal low-rank subspaces per task to minimize inter-task interference, and CL-LoRA [37] extends this with shared orthogonal down-projections and early-exit KD for class-incremental learning. AdapterFusion [40] composes task-specific adapters via learned attention weights. Our TRA component applies a related principle to the *teacher's* output adapter: a frozen shared core captures generic feature-to-anatomy mappings, while per-task 1x1 residuals specialize to each label space. Unlike O-LoRA's fully separate subspaces, TRA's shared core enables cross-task feature reuse while frozen residuals guarantee zero interference.
 
-**Confidence-aware distillation.** Uncertainty-weighted KD has been explored using teacher output entropy [28], temperature scaling [29], and Monte Carlo dropout [30]. These approaches use the teacher's output statistics as a proxy for reliability. Our CGAD differs in two respects: (i) it operates on the adapter's *internal features* rather than output probabilities, accessing richer reliability signals; and (ii) it is trained with explicit correctness supervision, learning where the adapter actually produces accurate predictions rather than relying on distributional heuristics.
+**Confidence-aware distillation.** Uncertainty-weighted KD has been explored using teacher output entropy [28], temperature scaling [29], and Monte Carlo dropout [30]. ReCo-KD [38] uses class-aware scale masks and activation statistics to weight voxel-wise distillation in 3D medical segmentation, up-weighting small clinical structures. Yu et al. [42] propose dual-teacher selection based on feature discrepancy for VLM continual learning. Our CGAD differs from these in two respects: (i) it operates on the adapter's *internal features* rather than output probabilities or ground-truth statistics, accessing richer reliability signals; and (ii) it is trained with explicit correctness supervision via BCE against teacher accuracy masks, learning *where the adapter is actually correct* rather than relying on distributional heuristics or label-derived statistics.
 
 ---
 
@@ -72,6 +74,28 @@ We first formalize why naive adapter distillation fails. The adapter $\mathcal{A
 **(c) Fine-tune.** Adapt the existing adapter to $C_{t+1}$. The adapter forgets $\mathcal{T}_t$'s mapping, degrading teacher quality on replayed $\mathcal{T}_t$ data.
 
 All three options produce unreliable teacher predictions at task boundaries. We observe empirically that this unreliability is *spatially non-uniform*: the teacher may be confident on large, well-represented structures (e.g., liver) but unreliable on small or boundary-adjacent structures (e.g., adrenal glands). GRACE addresses each failure mode with a targeted component.
+
+#### 3.2.1 Formal Analysis
+
+We formalize two properties that motivate GRACE's design.
+
+**Proposition 1 (Selective KD reduces harmful transfer).** Let $e_v = \mathbb{1}[\hat{y}_v \neq y_v]$ indicate teacher error at voxel $v$, and let $G_v \in [\gamma_{\min}, 1]$ be the gate value. Decompose the gated KD risk into *beneficial* (correct voxels) and *harmful* (erroneous voxels) components:
+
+$$R_{\text{gated}} = \frac{1}{|\Omega|}\sum_{v} G_v \cdot \ell_{\text{KD}}(v) = R_{\text{gated}}^{+} + R_{\text{gated}}^{-}$$
+
+where $R_{\text{gated}}^{-} = \frac{1}{|\Omega|}\sum_{v: e_v=1} G_v \cdot \ell_{\text{KD}}(v)$ is the harmful component. *Assume* (A1) the gate has positive correlation with correctness: $\mathbb{E}[G_v \mid e_v = 1] \leq 1 - \rho$ for some $\rho > 0$. Then:
+
+$$\mathbb{E}[R_{\text{gated}}^{-}] \leq (1 - \rho) \cdot \mathbb{E}[R_{\text{ungated}}^{-}]$$
+
+The harmful component is multiplicatively reduced by $(1 - \rho)$. The parameter $\rho$ is empirically measurable as the gap in mean gate activation between correctly and incorrectly predicted voxels during adapter pre-training (via the BCE supervision in Eq. 4). Larger $\rho$ indicates a more discriminative gate. $\square$
+
+**Proposition 2 (Snapshot degradation vs. stable external teacher).** Consider a sequence of $T$ tasks. Let $\Delta_T = \|\phi(x; \theta_T) - \phi(x; \theta_0^*)\|$ be the representation drift between the current student features and the frozen snapshot teacher's features, measured on replay samples from $\mathcal{T}_1$. *Assume* (B1) bounded per-task drift: $\|\phi(x; \theta_{t+1}) - \phi(x; \theta_t)\| \leq \delta$ for all $t$. By the triangle inequality:
+
+$$\Delta_T \leq T \cdot \delta$$
+
+The snapshot teacher's KD signal degrades as $O(T)$ because its implied gradient references an increasingly stale feature geometry. In contrast, GRACE's external teacher has zero drift: the foundation backbone $g_\phi$ is frozen, and each per-task residual $r_t$ is fixed after training. The teacher's prediction quality on task $\mathcal{T}_1$ replay data is $O(1)$, independent of $T$. The gap $\Delta_T^{\text{snapshot}} - \Delta_T^{\text{GRACE}} = O(T)$ grows linearly with sequence length, providing GRACE a *compounding advantage* on long task sequences. $\square$
+
+These propositions predict two testable hypotheses: (1) the CGAD gate should correlate positively with adapter correctness (verified in §5.1), and (2) GRACE's advantage over self-distillation should increase with the number of tasks in the sequence (tested in §4.2).
 
 ### 3.3 Task-Residual Adapter (TRA)
 
@@ -240,6 +264,8 @@ GRACE is ~150× more parameter-efficient per task than rebuilding standard adapt
 
 **The teacher reliability gap is fundamental, not incidental.** Our experiments show that even with replay and EWC, foundation model distillation with a standard adapter underperforms snapshot self-distillation. This counterintuitive result — a stronger teacher producing worse outcomes — arises because unreliable teacher predictions actively corrupt the student's training signal. The gate is essential: it converts a potentially harmful signal into a consistently helpful one.
 
+**Connection to gradient alignment.** GRACE's gated KD can be understood through the lens of gradient episodic memory [31]. GEM constrains the gradient update to have non-negative inner product with the gradient for each previous task. GRACE's gate achieves a softer version of this constraint: by suppressing KD in regions where the teacher is incorrect, the gate ensures the distillation gradient is positively aligned with the direction that preserves old-task performance. Unlike GEM's hard projection (which requires storing per-task gradients), GRACE's gating is learned once during pre-training and applied at negligible cost.
+
 **Limitations.** (1) GRACE requires a short adapter pre-training phase for each new task, adding latency before continual training begins. (2) The prototype bank assumes foundation features are discriminative for all classes; for classes with highly variable appearance, prototypes may not be representative. (3) We evaluate on a single dataset (TotalSegmentator); generalization to other modalities (MRI) and anatomical regions requires further study. (4) The gate is trained during adapter pre-training and fixed thereafter; an online adaptation mechanism could potentially improve performance on long task sequences.
 
 **Clinical relevance.** GRACE enables a practical deployment scenario: a hospital acquires a pre-trained MedSAM model once, trains GRACE adapters for its initial segmentation needs, then incrementally adds new anatomical targets as clinical requirements evolve — without retraining the foundation model, without access to previous patient data, and with a lightweight student model that runs on standard hospital hardware.
@@ -284,3 +310,16 @@ We identified the teacher reliability gap — a previously unrecognized failure 
 [28] Cho & Hariharan. On the Efficacy of Knowledge Distillation. ICCV, 2019.
 [29] Beyer et al. Knowledge Distillation: A Good Teacher is Patient and Consistent. CVPR, 2022.
 [30] Malinin & Gales. Predictive Uncertainty Estimation via Prior Networks. NeurIPS, 2018.
+[31] Lopez-Paz & Ranzato. Gradient Episodic Memory for Continual Learning. NeurIPS, 2017.
+[32] Stanton et al. Does Knowledge Distillation Really Work? NeurIPS, 2021.
+[33] Szatkowski et al. Adapt Your Teacher: Improving Knowledge Distillation for Exemplar-Free Continual Learning. WACV, 2024.
+[34] Zhang et al. Continual Learning for Abdominal Multi-Organ and Tumor Segmentation. MICCAI, 2023.
+[35] Schwarz et al. Progress & Compress: A Scalable Framework for Continual Learning. ICML, 2018.
+[36] Wang et al. O-LoRA: Orthogonal Subspace Learning for Language Model Continual Learning. EMNLP, 2023.
+[37] He et al. CL-LoRA: Continual Low-Rank Adaptation for Rehearsal-Free Class-Incremental Learning. CVPR, 2025.
+[38] Lan et al. ReCo-KD: Region- and Context-Aware Knowledge Distillation for Efficient 3D Medical Image Segmentation. arXiv, 2025.
+[39] Zhang et al. Revisiting Knowledge Distillation under Distribution Shift. arXiv, 2023.
+[40] Pfeiffer et al. AdapterFusion: Non-Destructive Task Composition for Transfer Learning. EACL, 2021.
+[41] Yu et al. SATCH: Specialized Assistant Teacher Distillation to Reduce Catastrophic Forgetting. 2024.
+[42] Yu et al. Select and Distill: Selective Dual-Teacher Knowledge Transfer for Continual Learning on Vision-Language Models. ECCV, 2024.
+[43] Wu et al. Multi-modality Multiorgan Image Segmentation Using Continual Learning with Enhanced Hard Attention to the Task. Medical Physics, 2025.
